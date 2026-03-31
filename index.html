@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>狐狸今天吃什么</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="logo">
+                <img src="/image1/eateat.jpg" alt="食物图片" class="logo-image">
+                <h1 class="title">狐狸今天吃什么</h1>
+            </div>
+            <p class="subtitle">吃嘛嘛香～～</p>
+            <div class="stats">
+                <div class="stat-item">
+                    <span class="stat-number" id="total-options">0</span>
+                    <span class="stat-label">餐饮选项</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number" id="today-count">0</span>
+                    <span class="stat-label">今日已选</span>
+                </div>
+            </div>
+        </header>
+
+        <nav class="nav">
+            <button id="home-btn" class="nav-btn active">首页</button>
+            <button id="manage-btn" class="nav-btn">管理选项</button>
+        </nav>
+
+        <main class="main">
+            <div class="app-container">
+                <div id="start-screen" class="screen active">
+                    <div class="hero-content">
+                        <div class="hero-emoji">🍽️</div>
+                        <h2 class="hero-title">今天吃什么？</h2>
+                    </div>
+                    <button id="start-btn" class="main-btn">开始选择</button>
+                </div>
+
+                <div id="result-screen" class="screen">
+                    <div id="result-container" class="result-container">
+                        <div id="result-content" class="result-content">
+                            <span id="emoji" class="emoji">🍽️</span>
+                            <h2 id="food-result" class="food-result"></h2>
+                        </div>
+                    </div>
+                    <div class="result-actions">
+                        <button id="retry-btn" class="secondary-btn">再抽一次</button>
+                        <button id="back-home-btn" class="outline-btn">返回首页</button>
+                    </div>
+                </div>
+
+                <div id="manage-screen" class="screen">
+                    <div class="manage-header">
+                        <h2 class="manage-title">管理餐饮选项</h2>
+                        <p class="manage-subtitle">添加或删除你喜欢的餐饮选项</p>
+                    </div>
+                    
+                    <div class="add-option-form">
+                        <div class="form-group">
+                            <label for="food-name">餐饮名称</label>
+                            <input type="text" id="food-name" placeholder="例如：川菜、火锅、披萨">
+                        </div>
+                        <div class="form-group">
+                            <label for="food-emoji">Emoji图标</label>
+                            <input type="text" id="food-emoji" placeholder="例如：🌶️、🍲、🍕">
+                        </div>
+                        <button id="add-btn" class="primary-btn">添加选项</button>
+                    </div>
+
+                    <div class="options-list">
+                        <h3 class="options-title">当前选项列表</h3>
+                        <div id="options-container" class="options-container">
+                            <!-- 选项列表将通过JavaScript动态生成 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <p>&copy; 2026 狐狸今天吃什么 | 让吃饭变得简单</p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
