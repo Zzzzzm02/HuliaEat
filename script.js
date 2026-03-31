@@ -1,71 +1,21 @@
-const DEFAULT_FOOD_OPTIONS = [
-    { name: '川菜', emoji: '🌶️' },
-    { name: '粤菜', emoji: '🍤' },
-    { name: '湘菜', emoji: '🥘' },
-    { name: '鲁菜', emoji: '🐟' },
-    { name: '苏菜', emoji: '🦐' },
-    { name: '浙菜', emoji: '🍜' },
-    { name: '闽菜', emoji: '🦪' },
-    { name: '徽菜', emoji: '🥩' },
-    { name: '火锅', emoji: '🍲' },
-    { name: '烧烤', emoji: '🍢' },
-    { name: '麻辣烫', emoji: '🌶️' },
-    { name: '串串香', emoji: '🍡' },
-    { name: '寿司', emoji: '🍣' },
-    { name: '拉面', emoji: '🍜' },
-    { name: '披萨', emoji: '🍕' },
-    { name: '汉堡', emoji: '🍔' },
-    { name: '炸鸡', emoji: '🍗' },
-    { name: '牛排', emoji: '🥩' },
-    { name: '意大利面', emoji: '🍝' },
-    { name: '生鱼片', emoji: '🐟' },
-    { name: '天妇罗', emoji: '🍤' },
-    { name: '咖喱饭', emoji: '🍛' },
-    { name: '石锅拌饭', emoji: '🍚' },
-    { name: '冷面', emoji: '🍜' },
-    { name: '烤肉', emoji: '🥩' },
-    { name: '烤鸭', emoji: '🦆' },
-    { name: '包子', emoji: '🥟' },
-    { name: '饺子', emoji: '🥟' },
-    { name: '馄饨', emoji: '🥟' },
-    { name: '面条', emoji: '🍜' },
-    { name: '米饭', emoji: '🍚' },
-    { name: '粥', emoji: '🍲' },
-    { name: '肠粉', emoji: '🍤' },
-    { name: '烧腊', emoji: '🥩' },
-    { name: '卤味', emoji: '🍗' },
-    { name: '凉拌菜', emoji: '🥗' },
-    { name: '甜品', emoji: '🍰' },
-    { name: '奶茶', emoji: '🥤' },
-    { name: '咖啡', emoji: '☕' }
-];
+const API_BASE = window.location.origin + '/api';
 
-const STORAGE_KEY = 'food_options';
 const TODAY_COUNT_KEY = 'today_count';
 const LAST_DATE_KEY = 'last_date';
 
 let foodOptions = [];
 let isAnimating = false;
 
-function loadOptions() {
-    const savedOptions = localStorage.getItem(STORAGE_KEY);
-    if (savedOptions) {
-        try {
-            foodOptions = JSON.parse(savedOptions);
-        } catch (e) {
-            console.error('Failed to parse saved options:', e);
-            foodOptions = [...DEFAULT_FOOD_OPTIONS];
-        }
-    } else {
-        foodOptions = [...DEFAULT_FOOD_OPTIONS];
-        saveOptions();
+async function loadOptions() {
+    try {
+        const response = await fetch(`${API_BASE}/options`);
+        if (!response.ok) throw new Error('加载选项失败');
+        foodOptions = await response.json();
+        updateStats();
+    } catch (error) {
+        console.error('加载选项失败:', error);
+        alert('加载选项失败，请刷新页面重试');
     }
-    updateStats();
-}
-
-function saveOptions() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(foodOptions));
-    updateStats();
 }
 
 function updateStats() {
@@ -185,7 +135,7 @@ function switchScreen(screenId) {
     }
 }
 
-function addFoodOption() {
+async function addFoodOption() {
     const nameInput = document.getElementById('food-name');
     const emojiInput = document.getElementById('food-emoji');
     
@@ -202,19 +152,46 @@ function addFoodOption() {
         return;
     }
     
-    foodOptions.push({ name, emoji });
-    saveOptions();
-    renderOptionsList();
-    
-    nameInput.value = '';
-    emojiInput.value = '';
+    try {
+        const response = await fetch(`${API_BASE}/options`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ name, emoji }),
+        });
+        
+        if (!response.ok) throw new Error('添加选项失败');
+        
+        const newOption = await response.json();
+        foodOptions.push(newOption);
+        updateStats();
+        renderOptionsList();
+        
+        nameInput.value = '';
+        emojiInput.value = '';
+    } catch (error) {
+        console.error('添加选项失败:', error);
+        alert('添加选项失败，请重试');
+    }
 }
 
-function deleteFoodOption(index) {
-    if (confirm('确定要删除这个选项吗？')) {
-        foodOptions.splice(index, 1);
-        saveOptions();
+async function deleteFoodOption(id) {
+    if (!confirm('确定要删除这个选项吗？')) return;
+    
+    try {
+        const response = await fetch(`${API_BASE}/options/${id}`, {
+            method: 'DELETE',
+        });
+        
+        if (!response.ok) throw new Error('删除选项失败');
+        
+        foodOptions = foodOptions.filter(option => option.id !== id);
+        updateStats();
         renderOptionsList();
+    } catch (error) {
+        console.error('删除选项失败:', error);
+        alert('删除选项失败，请重试');
     }
 }
 
@@ -227,13 +204,13 @@ function renderOptionsList() {
         return;
     }
     
-    foodOptions.forEach((option, index) => {
+    foodOptions.forEach((option) => {
         const optionElement = document.createElement('div');
         optionElement.className = 'option-item';
         optionElement.innerHTML = `
             <span class="option-emoji">${option.emoji}</span>
             <span class="option-name">${option.name}</span>
-            <button class="delete-btn" onclick="deleteFoodOption(${index})">×</button>
+            <button class="delete-btn" onclick="deleteFoodOption(${option.id})">×</button>
         `;
         container.appendChild(optionElement);
     });
