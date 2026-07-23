@@ -1,204 +1,101 @@
 # 狐狸今天吃什么
 
-一个轻量级、趣味性强的网页应用，帮助用户快速、有趣地决定当日餐食。
+一个可上线的餐饮随机选择应用，支持完整 CRUD（增删改查）并使用 PostgreSQL 持久化，适合部署到任意服务器。
 
-## 项目概述
+## 关键特性
 
-"狐狸今天吃什么"是一个解决选择困难症的网页应用。用户点击按钮后，系统通过抽奖动画随机展示一个餐饮选项，整体设计简约、现代、高级感。
-
-**支持多用户共享数据**：使用Node.js后端，所有用户看到的餐饮选项相同，支持跨浏览器、跨设备访问。
-
-## 核心功能
-
-- 🎯 主界面：简约现代的设计，居中显示主按钮
-- 🎭 抽奖动画：转盘式动画效果，持续2-3秒，营造悬念感
-- 📊 结果展示：优雅的结果呈现，附带emoji图标
-- 🔄 再抽一次：支持重新选择，操作流畅
-- 📱 响应式设计：适配桌面、平板及手机屏幕
-- 🌐 数据共享：所有用户共享同一份餐饮选项数据
-- ✏️ 选项管理：支持添加、删除餐饮选项
+- 随机抽取餐饮选项（前端动画）
+- 管理页支持新增、编辑、删除
+- 后端完整 REST API
+- PostgreSQL 持久化（跨服务器、跨重启不丢）
+- 首次启动可从 `data/options.json` 做一次性初始化
+- Docker / Docker Compose 部署
 
 ## 技术栈
 
-### 前端
-- HTML5 + CSS3 + JavaScript (ES6+)
-- Google Fonts (Inter)
+- 前端：HTML + CSS + JavaScript
+- 后端：Node.js + Express
+- 数据库：PostgreSQL
 
-### 后端
-- Node.js + Express
-- 内存存储（重启后数据重置）
+## 环境变量
 
-## 本地运行
+- `PORT`：服务端口，默认 `3000`
+- `DATABASE_URL`：PostgreSQL 连接串（必填）
+- `DATABASE_SSL`：是否启用数据库 SSL，`true` / `false`，默认 `false`
+- `SEED_FILE`：首次初始化种子文件路径，默认 `./data/options.json`
 
-### 安装依赖
+参考：`.env.example`
+
+## 本地开发
+
+### 方式一：你本机已有 PostgreSQL
 
 ```bash
 npm install
-```
-
-### 启动服务器
-
-```bash
+cp .env.example .env
 npm start
 ```
 
-服务器将在 `http://localhost:3000` 启动。
+确保 `.env` 里的 `DATABASE_URL` 能连接你的数据库。
 
-### 开发模式
+### 方式二：Docker Compose（推荐）
 
 ```bash
-npm run dev
+docker compose up -d --build
 ```
+
+访问：`http://localhost:3000`
+
+## API
+
+### 1) 健康检查
+- `GET /api/health`
+
+### 2) 查询全部选项
+- `GET /api/options`
+
+### 3) 查询单个选项
+- `GET /api/options/:id`
+
+### 4) 新增选项
+- `POST /api/options`
+- Body:
+```json
+{
+  "name": "螺蛳粉",
+  "emoji": "🍜"
+}
+```
+
+### 5) 全量更新选项
+- `PUT /api/options/:id`
+
+### 6) 部分更新选项
+- `PATCH /api/options/:id`
+
+### 7) 删除选项
+- `DELETE /api/options/:id`
+
+## 持久化说明
+
+- 现在持久化由 PostgreSQL 保证。
+- 只要 `DATABASE_URL` 指向同一个数据库，换服务器部署也会看到同一份数据。
+- `SEED_FILE` 只在数据库表为空时生效（一次性初始化）。
 
 ## 项目结构
 
-```
+```text
 .
-├── index.html      # 主页面
-├── styles.css      # 样式文件
-├── script.js       # 前端JavaScript逻辑
-├── server.js       # 后端服务器代码
-├── package.json    # 项目配置文件
-├── image1/         # 图片资源文件夹
-│   └── eateat.jpg  # Logo图片
-└── README.md       # 项目说明
+├── index.html
+├── styles.css
+├── script.js
+├── server.js
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
+├── .env.example
+├── data/
+│   ├── .gitkeep
+│   └── options.json
+└── README.md
 ```
-
-## API接口
-
-### 获取所有选项
-- **GET** `/api/options`
-- 返回所有餐饮选项
-
-### 添加选项
-- **POST** `/api/options`
-- 请求体：`{ "name": "选项名称", "emoji": "🍽️" }`
-- 返回新创建的选项
-
-### 更新选项
-- **PUT** `/api/options/:id`
-- 请求体：`{ "name": "新名称", "emoji": "🍽️" }`
-- 返回更新后的选项
-
-### 删除选项
-- **DELETE** `/api/options/:id`
-- 返回204状态码
-
-## 餐饮选项
-
-应用内置了39种餐饮选项，涵盖：
-- 八大菜系（川菜、粤菜、湘菜、鲁菜、苏菜、浙菜、闽菜、徽菜）
-- 特色美食（火锅、烧烤、麻辣烫、串串香等）
-- 西餐（披萨、汉堡、牛排、意大利面等）
-- 日韩料理（寿司、拉面、石锅拌饭等）
-- 中式小吃（包子、饺子、面条、粥等）
-- 饮品甜品（奶茶、咖啡、甜品等）
-
-## 设计特点
-
-- 🎨 简约现代的UI设计
-- 🌈 柔和的渐变背景
-- ✨ 流畅的动画效果
-- 🎯 响应式布局
-- ♿ 无障碍支持
-- 🍎 飘落的美食emoji动画
-
-## 浏览器兼容性
-
-- Chrome (最新两个版本)
-- Firefox (最新两个版本)
-- Safari (最新两个版本)
-- Edge (最新两个版本)
-
-## 部署
-
-### 阿里云部署
-
-1. **创建ECS实例**
-   - 选择Ubuntu 20.04 LTS
-   - 开放80端口
-
-2. **连接服务器**
-   ```bash
-   ssh root@您的服务器IP
-   ```
-
-3. **安装Node.js**
-   ```bash
-   curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-   sudo apt-get install -y nodejs
-   ```
-
-4. **克隆代码**
-   ```bash
-   git clone https://github.com/Zzzzzm02/HuliaEat.git
-   cd HuliaEat
-   npm install
-   ```
-
-5. **安装PM2（进程管理器）**
-   ```bash
-   sudo npm install -g pm2
-   pm2 start server.js --name hulia-eat
-   pm2 startup
-   pm2 save
-   ```
-
-6. **安装Nginx**
-   ```bash
-   sudo apt update
-   sudo apt install nginx
-   ```
-
-7. **配置Nginx反向代理**
-   ```bash
-   sudo nano /etc/nginx/sites-available/hulia
-   ```
-   
-   添加以下内容：
-   ```nginx
-   server {
-       listen 80;
-       server_name 您的域名或IP;
-       
-       location / {
-           proxy_pass http://localhost:3000;
-           proxy_http_version 1.1;
-           proxy_set_header Upgrade $http_upgrade;
-           proxy_set_header Connection 'upgrade';
-           proxy_set_header Host $host;
-           proxy_cache_bypass $http_upgrade;
-       }
-   }
-   ```
-
-8. **启用配置**
-   ```bash
-   sudo ln -s /etc/nginx/sites-available/hulia /etc/nginx/sites-enabled/
-   sudo nginx -t
-   sudo systemctl restart nginx
-   ```
-
-### 其他部署平台
-
-- **Vercel**: 支持Node.js后端部署
-- **Railway**: 支持Node.js应用部署
-- **Heroku**: 传统PaaS平台
-
-## 注意事项
-
-⚠️ **数据持久化**：当前使用内存存储，服务器重启后数据会重置。如需持久化存储，建议：
-- 使用MongoDB、MySQL等数据库
-- 或使用JSON文件存储
-
-## 许可证
-
-MIT License
-
-## 贡献
-
-欢迎提交Issue和Pull Request！
-
----
-
-Made with ❤️ by Fox

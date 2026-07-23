@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: huliaeat-db
+    environment:
+      POSTGRES_DB: huliaeat
+      POSTGRES_USER: huliaeat
+      POSTGRES_PASSWORD: huliaeat
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U huliaeat -d huliaeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  app:
+    build: .
+    container_name: huliaeat-app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgresql://huliaeat:huliaeat@db:5432/huliaeat
+      DATABASE_SSL: "false"
+      SEED_FILE: /app/data/options.json
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
