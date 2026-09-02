@@ -88,7 +88,10 @@ ALLOWED_ORIGIN="http://allowed.test"
 EVIL_ORIGIN="http://evil.test"
 BASE="http://127.0.0.1:${PORT}"
 DB_URL="postgresql://${SMOKE_PGUSER}:${SMOKE_PGPASSWORD}@${SMOKE_PGHOST}:${SMOKE_PGPORT}/${SMOKE_PGDATABASE}?options=-csearch_path%3D${SCHEMA}"
-LOG="$(mktemp -t huliaeat-smoke)"
+# 日志名自己按 PID 拼，不用 `mktemp -t 前缀`：那是 BSD/macOS 写法，
+# GNU coreutils 会因「模板里没有 X」报错退出，导致 LOG 为空、
+# 服务重定向失败 —— CI（Ubuntu）上真实踩过，别再改回去。
+LOG="${TMPDIR:-/tmp}/huliaeat-smoke.$$"
 # 期望条数取自种子文件本身：菜单增删后不必再来改测试断言
 SEED_COUNT="$(node -pe 'const d = require("./data/options.json"); (Array.isArray(d) ? d : d.options).length')"
 SRV_PID=""
@@ -110,9 +113,18 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 pass() { PASS_COUNT=$((PASS_COUNT + 1)); printf '  \033[32m✓\033[0m %s\n' "$1"; }
+
+# GitHub Actions 的原始日志必须登录才能读，但 annotation 可以走公开 API 看到。
+# 所以在 CI 里把失败细节同时写成 ::error::，本地终端则完全静默。
+ci_error() {
+    [ "${GITHUB_ACTIONS:-}" = "true" ] || return 0
+    printf '::error::%s\n' "$(printf '%s' "$*" | tr '\n' ' ' | cut -c1-500)"
+}
+
 fail() {
     FAIL_COUNT=$((FAIL_COUNT + 1))
     printf '  \033[31m✗\033[0m %s — 期望 %s，实际 %s\n' "$1" "$2" "${3:-}"
+    ci_error "断言失败: $1 | 期望 $2 | 实际 ${3:-}"
 }
 section() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
@@ -151,11 +163,13 @@ start_server() { # 启动被测服务（NODE_ENV=production + ADMIN_TOKEN）
         if ! kill -0 "$SRV_PID" 2>/dev/null; then
             echo "服务启动失败，日志：" >&2
             cat "$LOG" >&2
+            ci_error "服务启动失败: $(cat "$LOG" | tr '\n' ' ')"
             return 1
         fi
         sleep 0.25
     done
     echo "服务启动超时" >&2
+    ci_error "服务在 60 次探测内未就绪: $(cat "$LOG" | tr '\n' ' ')"
     return 1
 }
 
@@ -163,6 +177,8 @@ echo "冒烟测试：临时 schema=${SCHEMA}，端口=${PORT}"
 
 if ! psql -q -c "create schema \"${SCHEMA}\";" >/dev/null 2>&1; then
     echo "无法创建临时 schema，请确认 PostgreSQL 可用且 ${SMOKE_PGUSER} 有 CREATE 权限。" >&2
+    # 把 psql 是否存在一并写进 annotation：CI 上「命令找不到」和「权限不够」症状相同，必须区分
+    ci_error "无法创建临时 schema（psql=$(command -v psql || echo 未安装) host=${SMOKE_PGHOST} port=${SMOKE_PGPORT} db=${SMOKE_PGDATABASE} user=${SMOKE_PGUSER}）"
     exit 1
 fi
 
@@ -291,13 +307,13 @@ section "启动策略：production 缺少密钥必须拒绝启动"
 kill "$SRV_PID" 2>/dev/null
 wait "$SRV_PID" 2>/dev/null
 SRV_PID=""
-FAILBOOT_LOG="$(mktemp -t huliaeat-boot)"
+FAILBOOT_LOG="${TMPDIR:-/tmp}/huliaeat-boot.$$"
 NODE_ENV=production ADMIN_TOKEN="" PORT=$((PORT + 1)) DATABASE_URL="$DB_URL" node server.js >"$FAILBOOT_LOG" 2>&1
 expect_code "NODE_ENV=production 且无 ADMIN_TOKEN → 非 0 退出" "1" "$?"
 expect_has "退出原因写明需要 ADMIN_TOKEN" "ADMIN_TOKEN" "$FAILBOOT_LOG"
 rm -f "$FAILBOOT_LOG"
 
-DEVBOOT_LOG="$(mktemp -t huliaeat-dev)"
+DEVBOOT_LOG="${TMPDIR:-/tmp}/huliaeat-dev.$$"
 NODE_ENV=development ADMIN_TOKEN="" PORT=$((PORT + 2)) DATABASE_URL="$DB_URL" node server.js >"$DEVBOOT_LOG" 2>&1 &
 DEV_PID=$!
 DEV_OK=0
@@ -314,4 +330,7 @@ rm -f "$DEVBOOT_LOG"
 
 # ---------------------------------------------------------------- 汇总
 printf '\n\033[1m结果：%d 通过 / %d 失败\033[0m\n' "$PASS_COUNT" "$FAIL_COUNT"
-[ "$FAIL_COUNT" -eq 0 ] || exit 1
+if [ "$FAIL_COUNT" -ne 0 ]; then
+    ci_error "冒烟测试 ${PASS_COUNT} 通过 / ${FAIL_COUNT} 失败（每条失败都有单独的 annotation）"
+    exit 1
+fi

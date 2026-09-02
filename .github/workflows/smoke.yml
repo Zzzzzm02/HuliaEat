@@ -39,11 +39,11 @@ jobs:
       SMOKE_ADMIN_TOKEN: ci-smoke-token
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: 安装依赖（仅生产依赖）
