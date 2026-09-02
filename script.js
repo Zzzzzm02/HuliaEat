@@ -2,6 +2,7 @@ const API_BASE = `${window.location.origin}/api`;
 
 const TODAY_COUNT_KEY = 'today_count';
 const LAST_DATE_KEY = 'last_date';
+const ADMIN_TOKEN_KEY = 'hulia_admin_token';
 
 const MAX_NAME_LENGTH = 40;
 const MAX_EMOJI_LENGTH = 8;
@@ -87,6 +88,7 @@ async function runImport(mode) {
     try {
         const result = await requestJson(`${API_BASE}/options/import`, {
             method: 'POST',
+            admin: true,
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ mode, items })
         });
@@ -133,33 +135,110 @@ function hideManageMessage() {
     messageEl.className = 'manage-message';
 }
 
-async function requestJson(url, options = {}) {
-    const response = await fetch(url, options);
-    const contentType = response.headers.get('content-type') || '';
-    const isJson = contentType.includes('application/json');
-    const body = isJson ? await response.json() : null;
+/* ---------------- 管理密钥（写接口鉴权） ---------------- */
 
-    if (!response.ok) {
-        const errorMessage = body && body.error ? body.error : `请求失败（${response.status}）`;
-        throw new Error(errorMessage);
+function getAdminToken() {
+    try {
+        return localStorage.getItem(ADMIN_TOKEN_KEY) || '';
+    } catch (error) {
+        return '';
+    }
+}
+
+function setAdminToken(token) {
+    try {
+        if (token) {
+            localStorage.setItem(ADMIN_TOKEN_KEY, token);
+        } else {
+            localStorage.removeItem(ADMIN_TOKEN_KEY);
+        }
+    } catch (error) {
+        // 隐私模式下 localStorage 不可用，忽略即可
+    }
+}
+
+// 弹出输入框；返回 true 表示密钥有变化，值得重试一次
+function promptForAdminToken(silent = false) {
+    if (silent) return false;
+
+    const entered = window.prompt(
+        '修改菜单需要管理密钥（服务器上的 ADMIN_TOKEN）。\n\n请输入密钥：',
+        getAdminToken()
+    );
+
+    if (entered === null) return false;
+
+    const token = entered.trim();
+    if (!token) {
+        showManageMessage('管理密钥不能为空', 'error');
+        return false;
     }
 
-    return body;
+    setAdminToken(token);
+    return true;
+}
+
+function updateTokenBadge() {
+    const badge = document.getElementById('token-state');
+    if (!badge) return;
+
+    const hasToken = Boolean(getAdminToken());
+    badge.textContent = hasToken ? '已设置管理密钥' : '未设置管理密钥';
+    badge.classList.toggle('is-set', hasToken);
+}
+
+function withAdminHeader(options) {
+    const token = getAdminToken();
+    if (!token) return options;
+
+    return {
+        ...options,
+        headers: {
+            ...(options.headers || {}),
+            'x-admin-token': token
+        }
+    };
+}
+
+async function sendApiRequest(url, options = {}) {
+    const { admin = false, expectContent = true, ...fetchOptions } = options;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await fetch(url, admin ? withAdminHeader(fetchOptions) : fetchOptions);
+
+        // 密钥缺失或失效：提示输入后自动重试一次
+        if (response.status === 401 && admin && attempt === 0) {
+            if (promptForAdminToken()) {
+                updateTokenBadge();
+                continue;
+            }
+            throw new Error('需要管理密钥才能修改菜单');
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        const isJson = contentType.includes('application/json');
+        // 无论是否返回内容，都要解析出服务端的错误信息
+        const body = isJson ? await response.json() : null;
+
+        if (!response.ok) {
+            const errorMessage = body && body.error ? body.error : `请求失败（${response.status}）`;
+            throw new Error(errorMessage);
+        }
+
+        return expectContent ? body : null;
+    }
+
+    throw new Error('鉴权失败：管理密钥无效');
+}
+
+async function requestJson(url, options = {}) {
+    return sendApiRequest(url, options);
 }
 
 async function requestNoContent(url, options = {}) {
-    const response = await fetch(url, options);
-    if (!response.ok) {
-        let errorMessage = `请求失败（${response.status}）`;
-        try {
-            const body = await response.json();
-            if (body && body.error) errorMessage = body.error;
-        } catch (e) {
-            // ignore json parse error
-        }
-        throw new Error(errorMessage);
-    }
+    return sendApiRequest(url, { ...options, expectContent: false });
 }
+
 
 async function loadOptions({ silent = false } = {}) {
     try {
@@ -377,6 +456,7 @@ async function addFoodOption() {
     try {
         const newOption = await requestJson(`${API_BASE}/options`, {
             method: 'POST',
+            admin: true,
             headers: {
                 'Content-Type': 'application/json'
             },
@@ -404,7 +484,8 @@ async function deleteFoodOption(id) {
 
     try {
         await requestNoContent(`${API_BASE}/options/${id}`, {
-            method: 'DELETE'
+            method: 'DELETE',
+            admin: true
         });
 
         foodOptions = foodOptions.filter((option) => option.id !== id);
@@ -452,6 +533,7 @@ async function saveEditingOption(id) {
     try {
         const updatedOption = await requestJson(`${API_BASE}/options/${id}`, {
             method: 'PATCH',
+            admin: true,
             headers: {
                 'Content-Type': 'application/json'
             },
@@ -640,6 +722,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (importAppendBtn) importAppendBtn.addEventListener('click', () => runImport('append'));
     if (importReplaceBtn) importReplaceBtn.addEventListener('click', () => runImport('replace'));
+
+    const tokenSetBtn = document.getElementById('token-set-btn');
+    const tokenClearBtn = document.getElementById('token-clear-btn');
+
+    if (tokenSetBtn) {
+        tokenSetBtn.addEventListener('click', () => {
+            if (promptForAdminToken()) {
+                updateTokenBadge();
+                showManageMessage('管理密钥已保存', 'success');
+            }
+        });
+    }
+
+    if (tokenClearBtn) {
+        tokenClearBtn.addEventListener('click', () => {
+            setAdminToken('');
+            updateTokenBadge();
+            showManageMessage('已清除本机保存的管理密钥', 'info');
+        });
+    }
+
+    updateTokenBadge();
 
     document.getElementById('food-name').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {

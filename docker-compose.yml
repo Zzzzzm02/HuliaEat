@@ -3,17 +3,19 @@ services:
     image: postgres:16-alpine
     container_name: huliaeat-db
     environment:
-      POSTGRES_DB: huliaeat
-      POSTGRES_USER: huliaeat
-      POSTGRES_PASSWORD: huliaeat
+      POSTGRES_DB: ${POSTGRES_DB:-huliaeat}
+      POSTGRES_USER: ${POSTGRES_USER:-huliaeat}
+      # 部署密钥统一由 .env 提供，缺失时 compose 直接报错（fail-closed）
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请先在 .env 中设置 POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U huliaeat -d huliaeat"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-huliaeat} -d ${POSTGRES_DB:-huliaeat}"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    # 注意：故意不发布 5432 端口，数据库只在 compose 内部网络可达
 
   app:
     build: .
@@ -23,11 +25,18 @@ services:
         condition: service_healthy
     environment:
       PORT: 3000
-      DATABASE_URL: postgresql://huliaeat:huliaeat@db:5432/huliaeat
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-huliaeat}:${POSTGRES_PASSWORD:?请先在 .env 中设置 POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-huliaeat}
       DATABASE_SSL: "false"
       SEED_FILE: /app/data/options.json
+      # 写接口管理密钥，必填；生成：openssl rand -hex 24
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?请先在 .env 中设置 ADMIN_TOKEN}
+      # 跨域写白名单，前后端同源部署时留空即可
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      # 放在 Nginx 等反代后面时设为 true
+      TRUST_PROXY: ${TRUST_PROXY:-false}
     ports:
-      - "3000:3000"
+      - "${APP_PORT:-3000}:3000"
     restart: unless-stopped
 
 volumes:

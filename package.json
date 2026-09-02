@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "smoke": "bash scripts/smoke.sh"
   },
   "keywords": [
     "food",
@@ -15,7 +16,6 @@
   "author": "Fox",
   "license": "MIT",
   "dependencies": {
-    "cors": "^2.8.5",
     "express": "^4.18.2",
     "pg": "^8.20.0"
   }

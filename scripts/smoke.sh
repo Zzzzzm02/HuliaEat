@@ -1,0 +1,248 @@
+#!/usr/bin/env bash
+#
+# 安全与接口冒烟测试
+#
+#   npm run smoke            # 自动读取本机 .env
+#   ./scripts/smoke.sh       # 同上
+#
+# 全部写操作都发生在一个临时 PostgreSQL schema 里（结束即 drop），
+# 不会碰到 public.food_options 的正式数据。
+#
+# 连接凭据一律来自环境，脚本内不内置任何真实口令：
+#   优先 SMOKE_PGHOST / SMOKE_PGPORT / SMOKE_PGDATABASE / SMOKE_PGUSER / SMOKE_PGPASSWORD
+#   或直接给 DATABASE_URL（从中解析）
+#   也可放在仓库根目录的 .env 里（已被 git 忽略），脚本会自动读取
+# 其它可选项：SMOKE_PORT（默认 3399）、SMOKE_ADMIN_TOKEN（默认随机生成）
+#
+set -uo pipefail
+
+cd "$(dirname "$0")/.."
+
+# 自动加载本机 .env（不存在则跳过；不用 dotenv，避免为一个测试脚本引依赖）
+if [ -f .env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . ./.env
+    set +a
+fi
+
+_smoke_split_url() { # postgresql://user:pass@host:port/db
+    local url="$1"
+    SMOKE_PGUSER="${url#*://}"
+    SMOKE_PGUSER="${SMOKE_PGUSER%%:*}"
+    SMOKE_PGPASSWORD="${url#*://:}"
+    SMOKE_PGPASSWORD="${SMOKE_PGPASSWORD%%@*}"
+    local rest="${url#*@}"
+    SMOKE_PGHOST="${rest%%[:/]*}"
+    local after_host="${rest#*:}"
+    SMOKE_PGPORT="${after_host%%/*}"
+    SMOKE_PGDATABASE="${after_host#*/}"
+    SMOKE_PGDATABASE="${SMOKE_PGDATABASE%%\?*}"
+}
+
+if [ -z "${SMOKE_PGUSER:-}" ] || [ -z "${SMOKE_PGPASSWORD:-}" ]; then
+    if [ -n "${DATABASE_URL:-}" ]; then
+        _smoke_split_url "$DATABASE_URL"
+    fi
+fi
+
+SMOKE_PGHOST="${SMOKE_PGHOST:-}"
+SMOKE_PGPORT="${SMOKE_PGPORT:-5432}"
+SMOKE_PGDATABASE="${SMOKE_PGDATABASE:-}"
+SMOKE_PGUSER="${SMOKE_PGUSER:-}"
+SMOKE_PGPASSWORD="${SMOKE_PGPASSWORD:-}"
+
+if [ -z "$SMOKE_PGHOST" ] || [ -z "$SMOKE_PGDATABASE" ] || [ -z "$SMOKE_PGUSER" ] || [ -z "$SMOKE_PGPASSWORD" ]; then
+    echo "缺少 PostgreSQL 连接信息。请在 .env 里提供 DATABASE_URL，或显式设置：" >&2
+    echo "  SMOKE_PGHOST / SMOKE_PGPORT / SMOKE_PGDATABASE / SMOKE_PGUSER / SMOKE_PGPASSWORD" >&2
+    echo "本脚本故意不内置任何默认口令，避免真实凭据进入仓库。" >&2
+    exit 2
+fi
+
+PORT="${SMOKE_PORT:-3399}"
+SCHEMA="smoke_$$"
+# 测试用密钥随机生成，不落盘、不入库
+TOKEN="${SMOKE_ADMIN_TOKEN:-smoke-$RANDOM$RANDOM$(date +%s)}"
+WRONG="definitely-wrong-token"
+ALLOWED_ORIGIN="http://allowed.test"
+EVIL_ORIGIN="http://evil.test"
+BASE="http://127.0.0.1:${PORT}"
+DB_URL="postgresql://${SMOKE_PGUSER}:${SMOKE_PGPASSWORD}@${SMOKE_PGHOST}:${SMOKE_PGPORT}/${SMOKE_PGDATABASE}?options=-csearch_path%3D${SCHEMA}"
+LOG="$(mktemp -t huliaeat-smoke)"
+SRV_PID=""
+
+export PGHOST="$SMOKE_PGHOST" PGPORT="$SMOKE_PGPORT" PGDATABASE="$SMOKE_PGDATABASE"
+export PGUSER="$SMOKE_PGUSER" PGPASSWORD="$SMOKE_PGPASSWORD"
+
+PASS_COUNT=0
+FAIL_COUNT=0
+
+cleanup() {
+    if [ -n "$SRV_PID" ] && kill -0 "$SRV_PID" 2>/dev/null; then
+        kill "$SRV_PID" 2>/dev/null
+        wait "$SRV_PID" 2>/dev/null
+    fi
+    psql -q -c "drop schema if exists \"${SCHEMA}\" cascade;" >/dev/null 2>&1
+    rm -f "$LOG"
+}
+trap cleanup EXIT INT TERM
+
+pass() { PASS_COUNT=$((PASS_COUNT + 1)); printf '  \033[32m✓\033[0m %s\n' "$1"; }
+fail() {
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    printf '  \033[31m✗\033[0m %s — 期望 %s，实际 %s\n' "$1" "$2" "${3:-}"
+}
+section() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+
+expect_code() { # desc expected actual
+    if [ "$2" = "$3" ]; then pass "$1"; else fail "$1" "$2" "$3"; fi
+}
+
+expect_has() { # desc needle file-or-text-source
+    if grep -qF "$2" "$3" 2>/dev/null; then pass "$1"; else fail "$1" "包含 '$2'" "$3"; fi
+}
+
+code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+body() { curl -s "$@"; }
+ctype() { curl -s -o /dev/null -w '%{content_type}' "$@"; }
+count_of() { body "$@" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(Array.isArray(j)?j.length:(j.total??"-"))}catch(e){console.log("-")}})'; }
+header_value() { # url header-name [extra curl args...]
+    local url="$1" name="$2"; shift 2
+    curl -s -D - -o /dev/null "$@" "$url" \
+        | tr -d '\r' | tr 'A-Z' 'a-z' \
+        | awk -v h="$(printf '%s' "$name" | tr 'A-Z' 'a-z' | sed 's/:*$//')" 'index($0, h":")==1 {sub(/^[^:]*: */, ""); print; exit}'
+}
+
+start_server() { # 启动被测服务（NODE_ENV=production + ADMIN_TOKEN）
+    NODE_ENV=production \
+    ADMIN_TOKEN="$TOKEN" \
+    CORS_ALLOWED_ORIGINS="$ALLOWED_ORIGIN" \
+    PORT="$PORT" \
+    DATABASE_URL="$DB_URL" \
+        node server.js >"$LOG" 2>&1 &
+    SRV_PID=$!
+
+    for _ in $(seq 1 60); do
+        if curl -s -m 2 "${BASE}/api/health" | grep -q '"status":"ok"'; then
+            return 0
+        fi
+        if ! kill -0 "$SRV_PID" 2>/dev/null; then
+            echo "服务启动失败，日志：" >&2
+            cat "$LOG" >&2
+            return 1
+        fi
+        sleep 0.25
+    done
+    echo "服务启动超时" >&2
+    return 1
+}
+
+echo "冒烟测试：临时 schema=${SCHEMA}，端口=${PORT}"
+
+if ! psql -q -c "create schema \"${SCHEMA}\";" >/dev/null 2>&1; then
+    echo "无法创建临时 schema，请确认 PostgreSQL 可用且 ${SMOKE_PGUSER} 有 CREATE 权限。" >&2
+    exit 1
+fi
+
+start_server || exit 1
+
+# ---------------------------------------------------------------- 读接口
+section "读接口保持公开（无需密钥）"
+expect_code "GET /api/health → 200" 200 "$(code "${BASE}/api/health")"
+expect_code "GET /api/options → 200" 200 "$(code "${BASE}/api/options")"
+expect_code "空 schema 自动灌入种子数据（35 条）" 35 "$(count_of "${BASE}/api/options")"
+expect_code "跨域 GET 对任意来源开放（读接口不敏感）" "${EVIL_ORIGIN}" "$(header_value "${BASE}/api/options" "access-control-allow-origin" -H "Origin: ${EVIL_ORIGIN}")"
+
+# ---------------------------------------------------------------- 写接口鉴权
+section "写接口必须携带管理密钥"
+expect_code "POST 无密钥 → 401" 401 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -d '{"name":"无密钥","emoji":"🍜"}')"
+expect_code "POST 错密钥 → 401" 401 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${WRONG}" -d '{"name":"错密钥","emoji":"🍜"}')"
+expect_code "DELETE 无密钥 → 401" 401 "$(code -X DELETE "${BASE}/api/options/1")"
+expect_code "PATCH 无密钥 → 401" 401 "$(code -X PATCH "${BASE}/api/options/1" -H 'Content-Type: application/json' -d '{"emoji":"🍜"}')"
+expect_code "PUT 无密钥 → 401" 401 "$(code -X PUT "${BASE}/api/options/1" -H 'Content-Type: application/json' -d '{"name":"x","emoji":"🍜"}')"
+expect_code "import(replace) 无密钥 → 401，且数据未被清空" 401 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -d '{"mode":"replace","items":[{"name":"恶意","emoji":"🍜"}]}')"
+expect_code "未授权后数据量不变（仍 35 条）" 35 "$(count_of "${BASE}/api/options")"
+expect_code "Authorization: Bearer 也可通过" 201 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "Authorization: Bearer ${TOKEN}" -d '{"name":"Bearer 测试","emoji":"🥟"}')"
+
+# ---------------------------------------------------------------- CRUD 往返
+section "带密钥的完整 CRUD 往返"
+NEW_ID=$(body -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"冒烟小火锅","emoji":"🍲"}' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).id))')
+expect_code "POST 返回新 id（${NEW_ID}）" "ok" "$([ -n "$NEW_ID" ] && echo ok || echo empty)"
+expect_code "GET 单条 → 200" 200 "$(code "${BASE}/api/options/${NEW_ID}")"
+expect_code "PUT 全量更新 → 200" 200 "$(code -X PUT "${BASE}/api/options/${NEW_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"冒烟小火锅2","emoji":"🍲"}')"
+expect_code "PATCH 部分更新 → 200" 200 "$(code -X PATCH "${BASE}/api/options/${NEW_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"emoji":"🌶️"}')"
+expect_code "重名仍可写（唯一约束属 P1，本次不改行为）" 201 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"冒烟小火锅2","emoji":"🍲"}')"
+expect_code "DELETE → 204" 204 "$(code -X DELETE "${BASE}/api/options/${NEW_ID}" -H "x-admin-token: ${TOKEN}")"
+expect_code "删除后 GET → 404" 404 "$(code "${BASE}/api/options/${NEW_ID}")"
+
+# ---------------------------------------------------------------- 导入
+section "批量导入（append / replace）"
+expect_code "import append 带密钥 → 200" 200 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"append","items":[{"name":"导入甲","emoji":"🍜"},{"name":"导入乙","emoji":"🍚"}]}')"
+expect_code "import replace 带密钥 → 200" 200 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"replace","items":[{"name":"替换后只剩这家","emoji":"🦆"}]}')"
+expect_code "replace 后总数为 1" 1 "$(count_of "${BASE}/api/options")"
+expect_code "空 items → 400" 400 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"append","items":[]}')"
+BAD_JSON='{"name":'
+expect_code "坏 JSON → 400（不再被误报为 500）" 400 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$BAD_JSON")"
+expect_code "未知接口 → JSON 404" 404 "$(code "${BASE}/api/nope")"
+
+# ---------------------------------------------------------------- 静态资源
+section "静态资源只放行前端真正需要的文件"
+expect_code "GET / → 200" 200 "$(code "${BASE}/")"
+expect_code "GET / 返回 HTML" "text/html; charset=UTF-8" "$(ctype "${BASE}/")"
+expect_code "GET /styles.css → 200" 200 "$(code "${BASE}/styles.css")"
+expect_code "GET /script.js → 200" 200 "$(code "${BASE}/script.js")"
+expect_code "GET /image1/eateat.jpg → 200" 200 "$(code "${BASE}/image1/eateat.jpg")"
+for hidden in README.md package.json package-lock.json Dockerfile docker-compose.yml server.js script.js.map data/options.json image1/eateat.jpg.bak; do
+    expect_code "禁止读取 /${hidden}" 404 "$(code "${BASE}/${hidden}")"
+done
+for dotgit in .git/config .git/HEAD .env; do
+    expect_code "禁止读取 /${dotgit}" 404 "$(code "${BASE}/${dotgit}")"
+done
+expect_has "响应含安全头 nosniff" "x-content-type-options: nosniff" <(curl -s -D - -o /dev/null "${BASE}/api/health" | tr -d '\r' | tr 'A-Z' 'a-z')
+
+# ---------------------------------------------------------------- CORS
+section "跨域写操作需要白名单"
+expect_code "同域（Origin=host）写请求放行" 201 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -H "Origin: ${BASE}" -d '{"name":"同域写入","emoji":"🍜"}')"
+expect_code "白名单来源预检 → 204" 204 "$(code -X OPTIONS "${BASE}/api/options" -H "Origin: ${ALLOWED_ORIGIN}" -H 'Access-Control-Request-Method: POST')"
+expect_code "白名单来源写请求 → 201" 201 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -H "Origin: ${ALLOWED_ORIGIN}" -d '{"name":"白名单写入","emoji":"🍜"}')"
+expect_code "非白名单来源预检 → 403" 403 "$(code -X OPTIONS "${BASE}/api/options" -H "Origin: ${EVIL_ORIGIN}" -H 'Access-Control-Request-Method: POST')"
+expect_code "非白名单来源写请求 → 403（即使密钥正确）" 403 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -H "Origin: ${EVIL_ORIGIN}" -d '{"name":"跨域恶意","emoji":"🍜"}')"
+expect_code "非白名单来源不泄露 CORS 头" "" "$(header_value "${BASE}/api/options" "access-control-allow-origin" -H "Origin: ${EVIL_ORIGIN}" -X OPTIONS -H 'Access-Control-Request-Method: DELETE')"
+
+# ---------------------------------------------------------------- 限流
+section "密钥爆破限流（放最后，会打满计数）"
+for _ in $(seq 1 24); do
+    code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${WRONG}" -d '{"name":"爆破","emoji":"🍜"}' >/dev/null
+done
+expect_code "连续错密钥后被限流 → 429" 429 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${WRONG}" -d '{"name":"爆破","emoji":"🍜"}')"
+expect_code "限流后正确密钥也被挡住（说明是 IP 级限流）" 429 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"限流中","emoji":"🍜"}')"
+
+# ---------------------------------------------------------------- 启动策略
+section "启动策略：production 缺少密钥必须拒绝启动"
+kill "$SRV_PID" 2>/dev/null
+wait "$SRV_PID" 2>/dev/null
+SRV_PID=""
+FAILBOOT_LOG="$(mktemp -t huliaeat-boot)"
+NODE_ENV=production ADMIN_TOKEN="" PORT=$((PORT + 1)) DATABASE_URL="$DB_URL" node server.js >"$FAILBOOT_LOG" 2>&1
+expect_code "NODE_ENV=production 且无 ADMIN_TOKEN → 非 0 退出" "1" "$?"
+expect_has "退出原因写明需要 ADMIN_TOKEN" "ADMIN_TOKEN" "$FAILBOOT_LOG"
+rm -f "$FAILBOOT_LOG"
+
+DEVBOOT_LOG="$(mktemp -t huliaeat-dev)"
+NODE_ENV=development ADMIN_TOKEN="" PORT=$((PORT + 2)) DATABASE_URL="$DB_URL" node server.js >"$DEVBOOT_LOG" 2>&1 &
+DEV_PID=$!
+DEV_OK=0
+for _ in $(seq 1 60); do
+    if curl -s -m 2 "http://127.0.0.1:$((PORT + 2))/api/health" | grep -q '"status":"ok"'; then DEV_OK=1; break; fi
+    sleep 0.25
+done
+expect_code "开发模式无密钥仍可启动（附警告）" 1 "$DEV_OK"
+expect_has "启动日志打印安全警告" "安全警告" "$DEVBOOT_LOG"
+expect_code "开发模式写接口无需密钥 → 201" 201 "$(code -X POST "http://127.0.0.1:$((PORT + 2))/api/options" -H 'Content-Type: application/json' -d '{"name":"开发模式","emoji":"🍜"}')"
+kill "$DEV_PID" 2>/dev/null
+wait "$DEV_PID" 2>/dev/null
+rm -f "$DEVBOOT_LOG"
+
+# ---------------------------------------------------------------- 汇总
+printf '\n\033[1m结果：%d 通过 / %d 失败\033[0m\n' "$PASS_COUNT" "$FAIL_COUNT"
+[ "$FAIL_COUNT" -eq 0 ] || exit 1
