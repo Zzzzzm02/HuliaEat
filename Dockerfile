@@ -1,7 +1,10 @@
 FROM node:20-alpine
 
+# HOST 显式设为 0.0.0.0：容器内需绑到 eth0，否则端口映射收不到流量。
+# 仓库默认值是 127.0.0.1（只绑回环），这里属于容器场景的有意覆盖。
 ENV NODE_ENV=production \
-    PORT=3000
+    PORT=3000 \
+    HOST=0.0.0.0
 
 WORKDIR /app
 

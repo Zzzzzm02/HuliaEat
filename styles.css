@@ -1199,3 +1199,224 @@ input:focus-visible {
         transition-duration: .01ms !important;
     }
 }
+
+/* ---------------- 榜单切换与本机排除 ---------------- */
+
+.list-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    margin: 0 0 1.1rem;
+    padding: 0;
+}
+
+.chip {
+    appearance: none;
+    border: 1px solid var(--line);
+    background: var(--paper);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: .86rem;
+    line-height: 1;
+    padding: .5rem .85rem;
+    border-radius: var(--r-pill);
+    cursor: pointer;
+    transition: background .18s var(--ease), color .18s var(--ease), border-color .18s var(--ease), transform .18s var(--ease);
+}
+
+.chip:hover {
+    border-color: var(--fox-soft);
+    color: var(--ink);
+    transform: translateY(-1px);
+}
+
+.chip.active {
+    background: var(--fox);
+    border-color: var(--fox);
+    color: var(--cream);
+    font-weight: 600;
+}
+
+.exclusion-note {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem;
+    margin: -.4rem 0 1.1rem;
+    font-size: .8rem;
+    color: var(--ink-3);
+}
+
+.result-secondary {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: .55rem;
+    margin-top: .9rem;
+}
+
+.chip-action {
+    appearance: none;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: .82rem;
+    padding: .45rem .8rem;
+    border-radius: var(--r-pill);
+    cursor: pointer;
+    transition: background .18s var(--ease), border-color .18s var(--ease), color .18s var(--ease);
+}
+
+.chip-action:hover:not(:disabled) {
+    border-color: var(--fox-soft);
+    background: var(--cream-2);
+    color: var(--ink);
+}
+
+.chip-action:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+}
+
+.chip-action-danger {
+    color: var(--danger-ink);
+    border-color: var(--danger-bg);
+}
+
+.chip-action-danger:hover:not(:disabled) {
+    background: var(--danger-bg);
+    border-color: var(--danger-bg);
+    color: var(--danger-ink);
+}
+
+.chip-action-quiet {
+    font-size: .76rem;
+    padding: .3rem .6rem;
+}
+
+/* 管理页：店铺所属榜单 */
+
+.option-content {
+    flex-wrap: wrap;
+}
+
+.option-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .3rem;
+    flex-basis: 100%;
+    margin-left: calc(42px + .8rem);
+}
+
+.option-tag {
+    font-size: .68rem;
+    line-height: 1;
+    padding: .28rem .48rem;
+    border-radius: var(--r-pill);
+    background: var(--cream-2);
+    border: 1px solid var(--line);
+    color: var(--ink-3);
+}
+
+.option-tag-hidden {
+    background: var(--info-bg);
+    border-color: transparent;
+    color: var(--info-ink);
+}
+
+.option-btn.quiet {
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--ink-2);
+}
+
+.option-btn.quiet:hover {
+    background: var(--cream-2);
+    color: var(--ink);
+}
+
+/* 榜单管理面板 */
+
+.list-new-row {
+    display: flex;
+    gap: .5rem;
+    margin-bottom: .75rem;
+}
+
+.list-new-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    font: inherit;
+    font-size: .9rem;
+    padding: .55rem .7rem;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--line);
+    background: var(--paper);
+    color: var(--ink);
+}
+
+.list-new-input:focus {
+    outline: none;
+    border-color: var(--fox-soft);
+    box-shadow: 0 0 0 3px var(--fox-soft);
+}
+
+.lists-container {
+    display: flex;
+    flex-direction: column;
+    gap: .4rem;
+}
+
+.list-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: .6rem;
+    padding: .5rem .65rem;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--line);
+    background: var(--paper);
+}
+
+.list-row-name {
+    font-weight: 600;
+    font-size: .9rem;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+}
+
+.list-row-count {
+    font-size: .78rem;
+    color: var(--ink-3);
+    white-space: nowrap;
+}
+
+.list-row-actions {
+    display: flex;
+    gap: .35rem;
+}
+
+.list-membership-row {
+    display: flex;
+    gap: .5rem;
+    margin-top: .75rem;
+}
+
+.membership-select {
+    flex: 1 1 auto;
+    min-width: 0;
+    font: inherit;
+    font-size: .88rem;
+    padding: .5rem .6rem;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--line);
+    background: var(--paper);
+    color: var(--ink);
+}
+
+@media (max-width: 420px) {
+    .option-tags {
+        margin-left: 0;
+    }
+}

@@ -25,6 +25,8 @@ services:
         condition: service_healthy
     environment:
       PORT: 3000
+      # 容器里必须绑 0.0.0.0，端口映射才收得到外部流量（仓库默认只绑回环）
+      HOST: 0.0.0.0
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-huliaeat}:${POSTGRES_PASSWORD:?请先在 .env 中设置 POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-huliaeat}
       DATABASE_SSL: "false"

@@ -1,0 +1,62 @@
+name: 冒烟测试
+
+# 目的：任何改动合并前，先在一台全新的 Postgres 上跑一遍真实接口，
+# 尤其保证「鉴权不可被绕过」这条不会因重构而退化。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          # CI 用的是一次性容器，这里的口令不是任何真实凭据
+          POSTGRES_USER: hulia_ci
+          POSTGRES_PASSWORD: hulia_ci_pw
+          POSTGRES_DB: huliaeat_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hulia_ci -d huliaeat_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      SMOKE_PGHOST: 127.0.0.1
+      SMOKE_PGPORT: "5432"
+      SMOKE_PGUSER: hulia_ci
+      SMOKE_PGPASSWORD: hulia_ci_pw
+      SMOKE_PGDATABASE: huliaeat_ci
+      # 固定测试密钥，避免每次随机导致的日志噪声
+      SMOKE_ADMIN_TOKEN: ci-smoke-token
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装依赖（仅生产依赖）
+        run: npm ci
+
+      - name: 语法检查
+        run: |
+          node --check server.js
+          node --check script.js
+          bash -n scripts/smoke.sh
+
+      - name: 种子快照可用
+        run: node -e 'const d=require("./data/options.json"); const n=Array.isArray(d)?d:d.options; if(!n.length) throw new Error("快照为空"); console.log("快照条数:", n.length)'
+
+      - name: 接口与安全冒烟
+        run: bash scripts/smoke.sh

@@ -1,11 +1,38 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs/promises');
+const fsSync = require('fs');
 const crypto = require('crypto');
 const { Pool } = require('pg');
 
+/*
+ * 轻量 .env 装载（约 15 行，故意不引入 dotenv）。
+ * 规则：只填补缺失项，已存在的环境变量优先 —— 这样容器/CI 显式传参不会被本地文件覆盖。
+ */
+(function loadEnvFile() {
+    const envPath = path.join(__dirname, '.env');
+    if (!fsSync.existsSync(envPath)) return;
+
+    for (const line of fsSync.readFileSync(envPath, 'utf8').split('\n')) {
+        const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+        if (!match) continue;
+
+        let value = match[2].trim();
+        if (/^".*"$/.test(value) || /^'.*'$/.test(value)) {
+            value = value.slice(1, -1);
+        }
+
+        if (value && process.env[match[1]] === undefined) {
+            process.env[match[1]] = value;
+        }
+    }
+})();
+
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
+// 默认只绑回环：误启动不会把服务泄露给整个局域网（容器部署需显式设 HOST=0.0.0.0）
+const HOST = (process.env.HOST || '127.0.0.1').trim() || '127.0.0.1';
+const IS_PUBLIC_BIND = HOST === '0.0.0.0' || HOST === '::' || HOST === '*' || HOST === '::0';
 const DATABASE_URL = process.env.DATABASE_URL;
 const DATABASE_SSL = process.env.DATABASE_SSL === 'true';
 const SEED_FILE = process.env.SEED_FILE || path.join(__dirname, 'data', 'options.json');
@@ -353,47 +380,138 @@ function normalizeImportItem(item) {
     return { name, emoji };
 }
 
-async function loadSeedOptions() {
-    try {
-        const content = await fs.readFile(SEED_FILE, 'utf8');
-        const parsed = JSON.parse(content);
+const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
+const DEFAULT_LIST_NAME = '默认榜单';
 
-        if (!Array.isArray(parsed)) {
-            throw new Error('种子文件格式错误，必须为数组');
-        }
+/* ---------------- 迁移：migrations/NNN_*.sql 按序执行 ---------------- */
 
-        const normalized = parsed
-            .map(normalizeSeedOption)
-            .filter(Boolean);
-
-        if (normalized.length === 0) {
-            throw new Error('种子文件没有有效数据');
-        }
-
-        return dedupeByName(normalized);
-    } catch (error) {
-        console.warn(`读取种子文件失败，将回退默认菜单。原因: ${error.message}`);
-        return [...DEFAULT_OPTIONS];
-    }
-}
-
-async function initDb() {
+async function runMigrations() {
     await pool.query(`
-        CREATE TABLE IF NOT EXISTS food_options (
-            id BIGSERIAL PRIMARY KEY,
-            name VARCHAR(${MAX_NAME_LENGTH}) NOT NULL,
-            emoji VARCHAR(${MAX_EMOJI_LENGTH}) NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            name TEXT PRIMARY KEY,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
     `);
 
+    let files;
+    try {
+        files = (await fs.readdir(MIGRATIONS_DIR))
+            .filter((file) => /^\d+_.*\.sql$/.test(file))
+            .sort();
+    } catch (error) {
+        console.warn(`未找到 migrations 目录（${MIGRATIONS_DIR}），跳过迁移。`);
+        return;
+    }
+
+    const appliedResult = await pool.query('SELECT name FROM schema_migrations');
+    const applied = new Set(appliedResult.rows.map((row) => row.name));
+
+    for (const file of files) {
+        if (applied.has(file)) continue;
+
+        const sql = await fs.readFile(path.join(MIGRATIONS_DIR, file), 'utf8');
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+            await client.query(sql);
+            await client.query('INSERT INTO schema_migrations(name) VALUES ($1)', [file]);
+            await client.query('COMMIT');
+            console.log(`已应用迁移: ${file}`);
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw new Error(`迁移 ${file} 失败: ${error.message}`);
+        } finally {
+            client.release();
+        }
+    }
+}
+
+/* ---------------- 种子：支持 v1 裸数组与 v2 多榜单两种格式 ---------------- */
+
+function normalizeSeedDocument(parsed) {
+    // v1：[{ name, emoji }, ...] —— 全部落到默认榜单
+    if (Array.isArray(parsed)) {
+        const options = dedupeByName(parsed.map(normalizeSeedOption).filter(Boolean))
+            .map((option) => ({ ...option, lists: [] }));
+
+        return { lists: [], options };
+    }
+
+    // v2：{ version: 2, lists: [{ name, sortOrder }], options: [{ name, emoji, lists: [榜单名] }] }
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.options)) {
+        throw new Error('种子文件格式错误：应为数组，或 { version, lists, options } 对象');
+    }
+
+    const seenLists = new Set();
+    const lists = [];
+
+    for (const [index, item] of (Array.isArray(parsed.lists) ? parsed.lists : []).entries()) {
+        const name = normalizeText(item && item.name);
+        if (!name || name.length > MAX_NAME_LENGTH) continue;
+
+        const key = name.toLowerCase();
+        if (seenLists.has(key)) continue;
+
+        seenLists.add(key);
+        lists.push({ name, sortOrder: Number(item.sortOrder) || index + 1 });
+    }
+
+    const merged = new Map();
+
+    for (const raw of parsed.options) {
+        const option = normalizeSeedOption(raw);
+        if (!option) continue;
+
+        const key = option.name.toLowerCase();
+        const wanted = Array.isArray(raw.lists)
+            ? raw.lists.map(normalizeText).filter((name) => seenLists.has(name.toLowerCase()))
+            : [];
+
+        if (!merged.has(key)) {
+            merged.set(key, { ...option, lists: wanted });
+            continue;
+        }
+
+        const existing = merged.get(key);
+        existing.lists = [...new Set([...existing.lists, ...wanted])];
+    }
+
+    const options = [...merged.values()];
+
+    if (options.length === 0) {
+        throw new Error('种子文件没有有效数据');
+    }
+
+    return { lists, options };
+}
+
+async function loadSeedDocument() {
+    try {
+        const content = await fs.readFile(SEED_FILE, 'utf8');
+        return normalizeSeedDocument(JSON.parse(content));
+    } catch (error) {
+        console.warn(`读取种子文件失败，将回退默认菜单。原因: ${error.message}`);
+        return normalizeSeedDocument([...DEFAULT_OPTIONS]);
+    }
+}
+
+async function ensureDefaultList(client) {
+    const existing = await client.query('SELECT id FROM lists WHERE LOWER(name) = $1', [DEFAULT_LIST_NAME.toLowerCase()]);
+    if (existing.rowCount > 0) return existing.rows[0].id;
+
+    const created = await client.query(
+        'INSERT INTO lists(name, sort_order) VALUES ($1, $2) RETURNING id',
+        [DEFAULT_LIST_NAME, 999]
+    );
+    return created.rows[0].id;
+}
+
+async function seedIfEmpty() {
     const countResult = await pool.query('SELECT COUNT(*)::int AS count FROM food_options');
-    const existingCount = countResult.rows[0].count;
+    if (countResult.rows[0].count > 0) return;
 
-    if (existingCount > 0) return;
-
-    const seedOptions = await loadSeedOptions();
+    const seed = await loadSeedDocument();
 
     const client = await pool.connect();
     let inTransaction = false;
@@ -402,14 +520,42 @@ async function initDb() {
         await client.query('BEGIN');
         inTransaction = true;
 
-        for (const option of seedOptions) {
-            await client.query(
-                'INSERT INTO food_options(name, emoji) VALUES ($1, $2)',
+        const defaultListId = await ensureDefaultList(client);
+
+        // 先建榜单，记下 名称 → id
+        const listIds = new Map();
+        for (const list of seed.lists) {
+            const result = await client.query(
+                `INSERT INTO lists(name, sort_order) VALUES ($1, $2)
+                 ON CONFLICT (LOWER(name)) DO UPDATE SET sort_order = EXCLUDED.sort_order
+                 RETURNING id`,
+                [list.name, list.sortOrder]
+            );
+            listIds.set(list.name.toLowerCase(), result.rows[0].id);
+        }
+
+        // 再插店，并按声明挂进榜单（未声明的进默认榜单）
+        for (const option of seed.options) {
+            const inserted = await client.query(
+                'INSERT INTO food_options(name, emoji) VALUES ($1, $2) RETURNING id',
                 [option.name, option.emoji]
             );
+            const optionId = inserted.rows[0].id;
+
+            const targets = option.lists.length
+                ? option.lists.map((name) => listIds.get(name.toLowerCase())).filter(Boolean)
+                : [defaultListId];
+
+            for (const listId of new Set(targets)) {
+                await client.query(
+                    'INSERT INTO list_items(list_id, option_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+                    [listId, optionId]
+                );
+            }
         }
 
         await client.query('COMMIT');
+        console.log(`已从种子文件初始化 ${seed.options.length} 家餐厅`);
     } catch (error) {
         if (inTransaction) {
             await client.query('ROLLBACK');
@@ -418,6 +564,11 @@ async function initDb() {
     } finally {
         client.release();
     }
+}
+
+async function initDb() {
+    await runMigrations();
+    await seedIfEmpty();
 }
 
 async function getOptionCount() {
@@ -463,12 +614,230 @@ app.get('/api/health', async (req, res) => {
     }
 });
 
+const OPTIONS_SELECT = `
+    SELECT o.id, o.name, o.emoji,
+           COALESCE(
+               json_agg(json_build_object('id', l.id, 'name', l.name)
+                        ORDER BY l.sort_order, l.id)
+               FILTER (WHERE l.id IS NOT NULL),
+               '[]'
+           ) AS lists
+    FROM food_options o
+    LEFT JOIN list_items li ON li.option_id = o.id
+    LEFT JOIN lists l ON l.id = li.list_id
+`;
+
 app.get('/api/options', async (req, res, next) => {
     try {
-        const result = await pool.query('SELECT id, name, emoji FROM food_options ORDER BY id ASC');
+        const listId = parseId(req.query.list);
+
+        // ?list=<非法值> 应当是 400，而不是静默返回全量
+        if (req.query.list !== undefined && !listId) {
+            return res.status(400).json({ error: '无效的榜单 ID' });
+        }
+
+        const params = [];
+        let where = '';
+
+        if (listId) {
+            where = 'WHERE EXISTS (SELECT 1 FROM list_items f WHERE f.option_id = o.id AND f.list_id = $1)';
+            params.push(listId);
+        }
+
+        const result = await pool.query(
+            `${OPTIONS_SELECT}
+             ${where}
+             GROUP BY o.id
+             ORDER BY o.id ASC`,
+            params
+        );
+
+        return res.json(result.rows);
+    } catch (error) {
+        return next(error);
+    }
+});
+
+app.get('/api/lists', async (req, res, next) => {
+    try {
+        const result = await pool.query(`
+            SELECT l.id, l.name, l.sort_order AS "sortOrder",
+                   COUNT(li.option_id)::int AS count
+            FROM lists l
+            LEFT JOIN list_items li ON li.list_id = l.id
+            GROUP BY l.id
+            ORDER BY l.sort_order ASC, l.id ASC
+        `);
+
         res.json(result.rows);
     } catch (error) {
         next(error);
+    }
+});
+
+function validateListPayload(payload, { partial = false } = {}) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        return { ok: false, error: '请求体必须是 JSON 对象' };
+    }
+
+    const hasName = Object.prototype.hasOwnProperty.call(payload, 'name');
+    const hasOrder = Object.prototype.hasOwnProperty.call(payload, 'sortOrder');
+
+    if (!hasName && !hasOrder) {
+        return { ok: false, error: partial ? '至少提供 name 或 sortOrder' : 'name 是必填项' };
+    }
+
+    const data = {};
+
+    if (hasName) {
+        const name = normalizeText(payload.name);
+        if (!name) return { ok: false, error: '榜单名称不能为空' };
+        if (name.length > MAX_NAME_LENGTH) {
+            return { ok: false, error: `榜单名称最长不能超过 ${MAX_NAME_LENGTH} 个字符` };
+        }
+        data.name = name;
+    }
+
+    if (hasOrder) {
+        const sortOrder = Number(payload.sortOrder);
+        if (!Number.isInteger(sortOrder)) return { ok: false, error: 'sortOrder 必须是整数' };
+        data.sortOrder = sortOrder;
+    }
+
+    return { ok: true, data };
+}
+
+app.post('/api/lists', requireAdmin, async (req, res, next) => {
+    try {
+        const validation = validateListPayload(req.body);
+        if (!validation.ok) {
+            return res.status(400).json({ error: validation.error });
+        }
+
+        const maxOrder = await pool.query('SELECT COALESCE(MAX(sort_order), 0)::int AS max FROM lists');
+        const result = await pool.query(
+            'INSERT INTO lists(name, sort_order) VALUES ($1, $2) RETURNING id, name, sort_order AS "sortOrder"',
+            [validation.data.name, maxOrder.rows[0].max + 1]
+        );
+
+        return res.status(201).json({ ...result.rows[0], count: 0 });
+    } catch (error) {
+        if (error.code === '23505') {
+            return res.status(409).json({ error: '已存在同名榜单' });
+        }
+        return next(error);
+    }
+});
+
+app.patch('/api/lists/:id', requireAdmin, async (req, res, next) => {
+    try {
+        const id = parseId(req.params.id);
+        if (!id) {
+            return res.status(400).json({ error: '无效的榜单 ID' });
+        }
+
+        const validation = validateListPayload(req.body, { partial: true });
+        if (!validation.ok) {
+            return res.status(400).json({ error: validation.error });
+        }
+
+        const current = await pool.query('SELECT id, name, sort_order FROM lists WHERE id = $1', [id]);
+        if (current.rowCount === 0) {
+            return res.status(404).json({ error: '榜单不存在' });
+        }
+
+        const nextName = validation.data.name ?? current.rows[0].name;
+        const nextOrder = validation.data.sortOrder ?? current.rows[0].sort_order;
+
+        const result = await pool.query(
+            `UPDATE lists SET name = $1, sort_order = $2, updated_at = NOW()
+             WHERE id = $3 RETURNING id, name, sort_order AS "sortOrder"`,
+            [nextName, nextOrder, id]
+        );
+
+        const count = await pool.query('SELECT COUNT(*)::int AS count FROM list_items WHERE list_id = $1', [id]);
+        return res.json({ ...result.rows[0], count: count.rows[0].count });
+    } catch (error) {
+        if (error.code === '23505') {
+            return res.status(409).json({ error: '已存在同名榜单' });
+        }
+        return next(error);
+    }
+});
+
+// 删除榜单只解除关联，店本身保留（下架一家店请走 DELETE /api/options/:id）
+app.delete('/api/lists/:id', requireAdmin, async (req, res, next) => {
+    try {
+        const id = parseId(req.params.id);
+        if (!id) {
+            return res.status(400).json({ error: '无效的榜单 ID' });
+        }
+
+        const result = await pool.query('DELETE FROM lists WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: '榜单不存在' });
+        }
+
+        return res.status(204).send();
+    } catch (error) {
+        return next(error);
+    }
+});
+
+//  membership 变更：{ optionIds: [1,2,3], mode: 'add' | 'remove' | 'replace' }
+app.post('/api/lists/:id/membership', requireAdmin, async (req, res, next) => {
+    try {
+        const listId = parseId(req.params.id);
+        if (!listId) {
+            return res.status(400).json({ error: '无效的榜单 ID' });
+        }
+
+        const listExists = await pool.query('SELECT id FROM lists WHERE id = $1', [listId]);
+        if (listExists.rowCount === 0) {
+            return res.status(404).json({ error: '榜单不存在' });
+        }
+
+        const body = req.body || {};
+        const mode = ['add', 'remove', 'replace'].includes(body.mode) ? body.mode : '';
+        if (!mode) {
+            return res.status(400).json({ error: "mode 必须是 'add' / 'remove' / 'replace'" });
+        }
+
+        if (!Array.isArray(body.optionIds)) {
+            return res.status(400).json({ error: 'optionIds 必须是数组' });
+        }
+
+        const optionIds = [...new Set(body.optionIds.map((item) => parseId(item)).filter(Boolean))];
+
+        if (optionIds.length !== body.optionIds.length) {
+            return res.status(400).json({ error: 'optionIds 含非法 ID' });
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            if (mode === 'replace') {
+                await client.query('DELETE FROM list_items WHERE list_id = $1', [listId]);
+            }
+
+            const sql = mode === 'remove'
+                ? 'DELETE FROM list_items WHERE list_id = $1 AND option_id = ANY($2::bigint[])'
+                : 'INSERT INTO list_items(list_id, option_id) SELECT $1, id FROM unnest($2::bigint[]) AS t(id) ON CONFLICT DO NOTHING';
+
+            await client.query(sql, [listId, optionIds]);
+            await client.query('COMMIT');
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+
+        const result = await pool.query('SELECT COUNT(*)::int AS count FROM list_items WHERE list_id = $1', [listId]);
+        return res.json({ listId, mode, count: result.rows[0].count });
+    } catch (error) {
+        return next(error);
     }
 });
 
@@ -480,7 +849,7 @@ app.get('/api/options/:id', async (req, res, next) => {
         }
 
         const result = await pool.query(
-            'SELECT id, name, emoji FROM food_options WHERE id = $1',
+            `${OPTIONS_SELECT} WHERE o.id = $1 GROUP BY o.id`,
             [id]
         );
 
@@ -501,12 +870,59 @@ app.post('/api/options', requireAdmin, async (req, res, next) => {
             return res.status(400).json({ error: validation.error });
         }
 
-        const result = await pool.query(
-            'INSERT INTO food_options(name, emoji) VALUES ($1, $2) RETURNING id, name, emoji',
-            [validation.data.name, validation.data.emoji]
-        );
+        // 可选 listIds：把新店同时挂进多个榜单；不给则进默认榜单
+        const rawListIds = req.body && Array.isArray(req.body.listIds) ? req.body.listIds : null;
+        const listIds = rawListIds ? [...new Set(rawListIds.map((item) => parseId(item)).filter(Boolean))] : null;
 
-        return res.status(201).json(result.rows[0]);
+        if (rawListIds && listIds.length !== rawListIds.length) {
+            return res.status(400).json({ error: 'listIds 含非法榜单 ID' });
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const inserted = await client.query(
+                'INSERT INTO food_options(name, emoji) VALUES ($1, $2) RETURNING id, name, emoji',
+                [validation.data.name, validation.data.emoji]
+            );
+            const option = inserted.rows[0];
+
+            let targets = listIds;
+
+            if (!targets || targets.length === 0) {
+                const fallback = await client.query(
+                    'SELECT id FROM lists ORDER BY (name = $1) DESC, sort_order ASC, id ASC LIMIT 1',
+                    [DEFAULT_LIST_NAME]
+                );
+                targets = fallback.rowCount ? [fallback.rows[0].id] : [];
+            }
+
+            for (const listId of targets) {
+                await client.query(
+                    `INSERT INTO list_items(list_id, option_id)
+                     SELECT $1, $2 FROM lists WHERE id = $1
+                     ON CONFLICT DO NOTHING`,
+                    [listId, option.id]
+                );
+            }
+
+            await client.query('COMMIT');
+
+            const lists = await client.query(
+                `SELECT l.id, l.name FROM lists l
+                 JOIN list_items li ON li.list_id = l.id
+                 WHERE li.option_id = $1 ORDER BY l.sort_order, l.id`,
+                [option.id]
+            );
+
+            return res.status(201).json({ ...option, lists: lists.rows });
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
     } catch (error) {
         return next(error);
     }
@@ -609,6 +1025,12 @@ app.post('/api/options/import', requireAdmin, async (req, res, next) => {
         const body = req.body || {};
         const mode = body.mode === 'append' ? 'append' : 'replace';
         const rawItems = Array.isArray(body.items) ? body.items : [];
+        const rawListId = body.listId === undefined ? null : body.listId;
+        const listId = rawListId === null ? null : parseId(rawListId);
+
+        if (rawListId !== null && !listId) {
+            return res.status(400).json({ error: '无效的榜单 ID' });
+        }
 
         const items = dedupeByName(rawItems.map(normalizeImportItem).filter(Boolean));
 
@@ -618,31 +1040,65 @@ app.post('/api/options/import', requireAdmin, async (req, res, next) => {
 
         const client = await pool.connect();
         let inTransaction = false;
+        let created = 0;
 
         try {
             await client.query('BEGIN');
             inTransaction = true;
 
+            let targetListId = listId;
+
             if (mode === 'replace') {
-                await client.query('TRUNCATE food_options RESTART IDENTITY');
+                // list_items 通过外键引用 food_options，必须一起截断，
+                // 否则 Postgres 会以 22665 拒绝截断被引用的表
+                await client.query('TRUNCATE food_options, list_items RESTART IDENTITY CASCADE');
+            }
+
+            if (!targetListId) {
+                const fallback = await client.query(
+                    'SELECT id FROM lists ORDER BY (name = $1) DESC, sort_order ASC, id ASC LIMIT 1',
+                    [DEFAULT_LIST_NAME]
+                );
+                if (fallback.rowCount === 0) {
+                    const created_list = await client.query(
+                        'INSERT INTO lists(name, sort_order) VALUES ($1, $2) RETURNING id',
+                        [DEFAULT_LIST_NAME, 1]
+                    );
+                    targetListId = created_list.rows[0].id;
+                } else {
+                    targetListId = fallback.rows[0].id;
+                }
+            } else {
+                const exists = await client.query('SELECT id FROM lists WHERE id = $1', [listId]);
+                if (exists.rowCount === 0) {
+                    return res.status(404).json({ error: '榜单不存在' });
+                }
             }
 
             for (const item of items) {
-                if (mode === 'append') {
-                    await client.query(
-                        `INSERT INTO food_options(name, emoji)
-                         SELECT $1::text, $2::text
-                         WHERE NOT EXISTS (
-                             SELECT 1 FROM food_options WHERE LOWER(name) = LOWER($1::text)
-                         )`,
-                        [item.name, item.emoji]
-                    );
+                // 重名不新建行，而是复用已有那一家 —— 否则榜单里会出现同一家店的两份真相
+                const found = await client.query(
+                    'SELECT id FROM food_options WHERE LOWER(name) = LOWER($1) ORDER BY id LIMIT 1',
+                    [item.name]
+                );
+
+                let optionId;
+
+                if (found.rowCount > 0) {
+                    optionId = found.rows[0].id;
                 } else {
-                    await client.query(
-                        'INSERT INTO food_options(name, emoji) VALUES ($1, $2)',
+                    const inserted = await client.query(
+                        'INSERT INTO food_options(name, emoji) VALUES ($1, $2) RETURNING id',
                         [item.name, item.emoji]
                     );
+                    optionId = inserted.rows[0].id;
+                    created += 1;
                 }
+
+                await client.query(
+                    'INSERT INTO list_items(list_id, option_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+                    [targetListId, optionId]
+                );
             }
 
             await client.query('COMMIT');
@@ -655,10 +1111,11 @@ app.post('/api/options/import', requireAdmin, async (req, res, next) => {
             client.release();
         }
 
-        const result = await pool.query('SELECT id, name, emoji FROM food_options ORDER BY id ASC');
+        const result = await pool.query(`${OPTIONS_SELECT} GROUP BY o.id ORDER BY o.id ASC`);
         return res.json({
             mode,
             imported: items.length,
+            created,
             total: result.rows.length,
             options: result.rows
         });
@@ -695,12 +1152,18 @@ let server;
 async function startServer() {
     await initDb();
 
-    server = app.listen(PORT, () => {
-        console.log(`服务器运行在 http://localhost:${PORT}`);
+    server = app.listen(PORT, HOST, () => {
+        const shown = IS_PUBLIC_BIND ? `* (所有网卡)` : HOST;
+        console.log(`服务器运行在 http://${HOST === '0.0.0.0' || HOST === '*' ? 'localhost' : HOST}:${PORT}  监听 ${shown}`);
         console.log('数据存储: PostgreSQL');
         console.log(`运行环境: ${IS_PRODUCTION ? 'production' : 'development'}`);
         console.log(`写接口鉴权: ${ADMIN_TOKEN ? '已启用（x-admin-token / Authorization: Bearer）' : '未启用（开发模式）'}`);
         console.log(`跨域写白名单: ${CORS_ALLOWED_ORIGINS.size ? [...CORS_ALLOWED_ORIGINS].join(', ') : '（仅同域）'}`);
+
+        if (IS_PUBLIC_BIND) {
+            console.warn('⚠️  已绑定所有网卡：同一网络内的任何设备都能访问本服务。');
+            console.warn('    这通常是 Docker / 服务器部署的预期行为；若只是本机调试，请改用 HOST=127.0.0.1。');
+        }
     });
 }
 

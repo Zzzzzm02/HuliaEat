@@ -28,7 +28,7 @@
                     <h1 class="title">狐狸今天吃什么</h1>
                 </div>
             </div>
-            <p class="subtitle">吃嘛嘛香，顿顿不重样</p>
+            <p class="subtitle">吃嘛嘛香，抽到啥吃啥</p>
 
             <div class="stats">
                 <div class="stat-item">
@@ -59,6 +59,11 @@
                         <h2 class="hero-title">今天，吃点什么好的？</h2>
                         <p class="hero-subtitle">美味无需纠结，一点即中。</p>
                     </div>
+
+                    <!-- 榜单切换（默认「全部」） -->
+                    <div id="list-chips" class="list-chips" role="tablist" aria-label="选择榜单"></div>
+                    <p id="exclusion-note" class="exclusion-note" hidden></p>
+
                     <button id="start-btn" class="main-btn">开始选择</button>
                 </div>
 
@@ -74,6 +79,11 @@
                         <button id="retry-btn" class="secondary-btn">再抽一次</button>
                         <button id="back-home-btn" class="outline-btn">返回首页</button>
                     </div>
+                    <div class="result-secondary">
+                        <button id="skip-btn" type="button" class="chip-action">🙅 最近不想吃（仅本机）</button>
+                        <button id="delist-btn" type="button" class="chip-action chip-action-danger" hidden>🗑️ 从菜单下架</button>
+                    </div>
+                    <p id="result-note" class="exclusion-note" hidden></p>
                 </div>
 
                 <!-- 管理 -->
@@ -87,6 +97,28 @@
                             <button id="token-clear-btn" type="button" class="token-btn token-btn-quiet">清除</button>
                         </div>
                     </div>
+
+                    <!-- 管理页的榜单切换：决定列表显示范围与新增店铺的归属 -->
+                    <div id="manage-list-chips" class="list-chips" role="tablist" aria-label="选择要管理的榜单"></div>
+
+                    <details class="import-panel">
+                        <summary class="import-toggle">
+                            <span class="import-toggle-text">🏷️ 榜单管理（建榜 / 改名 / 删除 / 移店）</span>
+                            <span class="import-caret" aria-hidden="true"></span>
+                        </summary>
+                        <div class="import-body">
+                            <p class="import-hint">一家店可以同时属于多个榜单。删除榜单只解除关联，不会删掉店铺本身。</p>
+                            <div class="list-new-row">
+                                <input type="text" id="new-list-name" class="list-new-input" placeholder="新榜单名称，例如：请客榜">
+                                <button id="create-list-btn" type="button" class="soft-btn">新建榜单</button>
+                            </div>
+                            <div id="lists-container" class="lists-container"></div>
+                            <div class="list-membership-row" id="membership-row" hidden>
+                                <select id="membership-select" class="membership-select" aria-label="选择要加入当前榜单的店铺"></select>
+                                <button id="membership-add-btn" type="button" class="soft-btn">加入当前榜单</button>
+                            </div>
+                        </div>
+                    </details>
 
                     <div class="add-option-form">
                         <div class="form-group">

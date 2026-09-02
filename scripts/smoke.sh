@@ -28,16 +28,36 @@ fi
 
 _smoke_split_url() { # postgresql://user:pass@host:port/db
     local url="$1"
-    SMOKE_PGUSER="${url#*://}"
-    SMOKE_PGUSER="${SMOKE_PGUSER%%:*}"
-    SMOKE_PGPASSWORD="${url#*://:}"
-    SMOKE_PGPASSWORD="${SMOKE_PGPASSWORD%%@*}"
-    local rest="${url#*@}"
-    SMOKE_PGHOST="${rest%%[:/]*}"
-    local after_host="${rest#*:}"
-    SMOKE_PGPORT="${after_host%%/*}"
-    SMOKE_PGDATABASE="${after_host#*/}"
-    SMOKE_PGDATABASE="${SMOKE_PGDATABASE%%\?*}"
+    local authority="${url#*://}"
+    local creds rest hostport pathpart
+
+    if [[ "$authority" == *@* ]]; then
+        # 以最后一个 @ 分界：口令里含 @ 时也能正确切分
+        creds="${authority%@*}"
+        rest="${authority##*@}"
+        SMOKE_PGUSER="${creds%%:*}"
+        SMOKE_PGPASSWORD="${creds#*:}"
+    else
+        SMOKE_PGUSER=""
+        SMOKE_PGPASSWORD=""
+        rest="$authority"
+    fi
+
+    hostport="${rest%%/*}"
+    SMOKE_PGHOST="${hostport%%:*}"
+
+    if [[ "$hostport" == *:* ]]; then
+        SMOKE_PGPORT="${hostport##*:}"
+    else
+        SMOKE_PGPORT="5432"
+    fi
+
+    if [[ "$rest" == */* ]]; then
+        pathpart="${rest#*/}"
+        SMOKE_PGDATABASE="${pathpart%%\?*}"
+    else
+        SMOKE_PGDATABASE=""
+    fi
 }
 
 if [ -z "${SMOKE_PGUSER:-}" ] || [ -z "${SMOKE_PGPASSWORD:-}" ]; then
@@ -69,6 +89,8 @@ EVIL_ORIGIN="http://evil.test"
 BASE="http://127.0.0.1:${PORT}"
 DB_URL="postgresql://${SMOKE_PGUSER}:${SMOKE_PGPASSWORD}@${SMOKE_PGHOST}:${SMOKE_PGPORT}/${SMOKE_PGDATABASE}?options=-csearch_path%3D${SCHEMA}"
 LOG="$(mktemp -t huliaeat-smoke)"
+# 期望条数取自种子文件本身：菜单增删后不必再来改测试断言
+SEED_COUNT="$(node -pe 'const d = require("./data/options.json"); (Array.isArray(d) ? d : d.options).length')"
 SRV_PID=""
 
 export PGHOST="$SMOKE_PGHOST" PGPORT="$SMOKE_PGPORT" PGDATABASE="$SMOKE_PGDATABASE"
@@ -150,7 +172,7 @@ start_server || exit 1
 section "读接口保持公开（无需密钥）"
 expect_code "GET /api/health → 200" 200 "$(code "${BASE}/api/health")"
 expect_code "GET /api/options → 200" 200 "$(code "${BASE}/api/options")"
-expect_code "空 schema 自动灌入种子数据（35 条）" 35 "$(count_of "${BASE}/api/options")"
+expect_code "空 schema 自动灌入种子数据（${SEED_COUNT} 条）" "$SEED_COUNT" "$(count_of "${BASE}/api/options")"
 expect_code "跨域 GET 对任意来源开放（读接口不敏感）" "${EVIL_ORIGIN}" "$(header_value "${BASE}/api/options" "access-control-allow-origin" -H "Origin: ${EVIL_ORIGIN}")"
 
 # ---------------------------------------------------------------- 写接口鉴权
@@ -161,7 +183,11 @@ expect_code "DELETE 无密钥 → 401" 401 "$(code -X DELETE "${BASE}/api/option
 expect_code "PATCH 无密钥 → 401" 401 "$(code -X PATCH "${BASE}/api/options/1" -H 'Content-Type: application/json' -d '{"emoji":"🍜"}')"
 expect_code "PUT 无密钥 → 401" 401 "$(code -X PUT "${BASE}/api/options/1" -H 'Content-Type: application/json' -d '{"name":"x","emoji":"🍜"}')"
 expect_code "import(replace) 无密钥 → 401，且数据未被清空" 401 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -d '{"mode":"replace","items":[{"name":"恶意","emoji":"🍜"}]}')"
-expect_code "未授权后数据量不变（仍 35 条）" 35 "$(count_of "${BASE}/api/options")"
+expect_code "未授权后数据量不变（仍 ${SEED_COUNT} 条）" "$SEED_COUNT" "$(count_of "${BASE}/api/options")"
+expect_code "POST /api/lists 无密钥 → 401" 401 "$(code -X POST "${BASE}/api/lists" -H 'Content-Type: application/json' -d '{"name":"未授权榜"}')"
+expect_code "PATCH /api/lists 无密钥 → 401" 401 "$(code -X PATCH "${BASE}/api/lists/1" -H 'Content-Type: application/json' -d '{"name":"未授权改名"}')"
+expect_code "DELETE /api/lists 无密钥 → 401" 401 "$(code -X DELETE "${BASE}/api/lists/1")"
+expect_code "membership 无密钥 → 401" 401 "$(code -X POST "${BASE}/api/lists/1/membership" -H 'Content-Type: application/json' -d '{"mode":"replace","optionIds":[1]}')"
 expect_code "Authorization: Bearer 也可通过" 201 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "Authorization: Bearer ${TOKEN}" -d '{"name":"Bearer 测试","emoji":"🥟"}')"
 
 # ---------------------------------------------------------------- CRUD 往返
@@ -184,6 +210,49 @@ expect_code "空 items → 400" 400 "$(code -X POST "${BASE}/api/options/import"
 BAD_JSON='{"name":'
 expect_code "坏 JSON → 400（不再被误报为 500）" 400 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$BAD_JSON")"
 expect_code "未知接口 → JSON 404" 404 "$(code "${BASE}/api/nope")"
+
+# ---------------------------------------------------------------- 多榜单
+section "多榜单：一店可属多榜、删榜不删店"
+pick_id() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(j.id ?? "")}catch(e){console.log("")}})'; }
+json_len() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(Array.isArray(j)?j.length:(j.lists?j.lists.length:"n/a"))}catch(e){console.log("parse-error")}})'; }
+
+LIST_A=$(body -X POST "${BASE}/api/lists" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"榜A"}' | pick_id)
+LIST_B=$(body -X POST "${BASE}/api/lists" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"榜B"}' | pick_id)
+expect_code "新建两个榜单拿到 id" "ok" "$([ -n "$LIST_A" ] && [ -n "$LIST_B" ] && echo ok || echo empty)"
+expect_code "同名榜单冲突 → 409" 409 "$(code -X POST "${BASE}/api/lists" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"榜A"}')"
+expect_code "GET /api/lists → 200" 200 "$(code "${BASE}/api/lists")"
+
+OPT_ID=$(body "${BASE}/api/options" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].id))')
+
+# 说明：payload 一律先赋值给变量再传入。
+# macOS 的 bash 3.2 在「双引号参数里嵌套 $( )，再用 \" 转义」时会拼错引号，
+# 把合法 JSON 打散成非法 JSON —— 于是测的其实是解析器而不是接口。
+PAYLOAD_ADD='{"mode":"add","optionIds":['$OPT_ID']}'
+PAYLOAD_EXPLODE='{"mode":"explode","optionIds":[1]}'
+PAYLOAD_REPLACE_EMPTY='{"mode":"replace","optionIds":[]}'
+
+MEMBER_ADD=$(code -X POST "${BASE}/api/lists/${LIST_A}/membership" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$PAYLOAD_ADD")
+expect_code "membership add 进榜A → 200" 200 "$MEMBER_ADD"
+expect_code "按榜A过滤 → 1 条" 1 "$(count_of "${BASE}/api/options?list=${LIST_A}")"
+expect_code "按榜B过滤 → 0 条（尚未加入）" 0 "$(count_of "${BASE}/api/options?list=${LIST_B}")"
+expect_code "非法 list 参数 → 400" 400 "$(code "${BASE}/api/options?list=not-a-number")"
+
+MEMBER_EXPLODE=$(code -X POST "${BASE}/api/lists/${LIST_A}/membership" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$PAYLOAD_EXPLODE")
+expect_code "非法 membership mode → 400" 400 "$MEMBER_EXPLODE"
+
+MULTI_BODY='{"name":"双榜店","emoji":"🍜","listIds":['$LIST_A','${LIST_B}']}'
+MULTI_ID=$(body -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$MULTI_BODY" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log((j.lists||[]).length)})')
+expect_code "一店同属两榜（lists 长度 2）" 2 "$MULTI_ID"
+expect_code "双榜店在榜A过滤中出现" 2 "$(count_of "${BASE}/api/options?list=${LIST_A}")"
+
+BEFORE_DEL=$(count_of "${BASE}/api/options")
+expect_code "删除榜B → 204" 204 "$(code -X DELETE "${BASE}/api/lists/${LIST_B}" -H "x-admin-token: ${TOKEN}")"
+expect_code "删榜后店本身不减少" "$BEFORE_DEL" "$(count_of "${BASE}/api/options")"
+expect_code "已删的榜B查询 → 空结果而非 500" 0 "$(count_of "${BASE}/api/options?list=${LIST_B}")"
+
+MEMBER_RESET=$(code -X POST "${BASE}/api/lists/${LIST_A}/membership" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$PAYLOAD_REPLACE_EMPTY")
+expect_code "membership replace 可整榜重置" 200 "$MEMBER_RESET"
+expect_code "重置后榜A为空" 0 "$(count_of "${BASE}/api/options?list=${LIST_A}")"
 
 # ---------------------------------------------------------------- 静态资源
 section "静态资源只放行前端真正需要的文件"

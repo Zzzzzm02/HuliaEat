@@ -3,13 +3,27 @@ const API_BASE = `${window.location.origin}/api`;
 const TODAY_COUNT_KEY = 'today_count';
 const LAST_DATE_KEY = 'last_date';
 const ADMIN_TOKEN_KEY = 'hulia_admin_token';
+const SELECTED_LIST_KEY = 'selected_list_id';
+const EXCLUDED_KEY = 'excluded_option_ids';
 
 const MAX_NAME_LENGTH = 40;
 const MAX_EMOJI_LENGTH = 8;
 
+const ALL_LISTS_ID = 0;
+
 let foodOptions = [];
+let lists = [];
+let selectedListId = ALL_LISTS_ID;
 let isAnimating = false;
 let editingOptionId = null;
+let lastResult = null;
+
+try {
+    const stored = Number.parseInt(localStorage.getItem(SELECTED_LIST_KEY), 10);
+    if (Number.isInteger(stored) && stored > 0) selectedListId = stored;
+} catch (error) {
+    // localStorage 不可用时保持「全部」
+}
 
 /* 关键词 → Emoji 自动匹配（自上而下，先匹配先生效） */
 const EMOJI_RULES = [
@@ -74,7 +88,9 @@ async function runImport(mode) {
         return;
     }
 
-    if (mode === 'replace' && !window.confirm(`确定用这份 ${names.length} 家名单替换当前全部选项吗？`)) {
+    if (mode === 'replace' && !window.confirm(
+        `确定用这份 ${names.length} 家名单【替换全部】吗？\n\n这会清空所有餐厅以及它们在各个榜单里的关联，不可撤销。\n（建议先跑一次 npm run export 留一份快照）`
+    )) {
         return;
     }
 
@@ -90,16 +106,22 @@ async function runImport(mode) {
             method: 'POST',
             admin: true,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mode, items })
+            body: JSON.stringify(
+                selectedListId === ALL_LISTS_ID
+                    ? { mode, items }
+                    : { mode, items, listId: Number(selectedListId) }
+            )
         });
 
         foodOptions = result.options;
         editingOptionId = null;
+        await loadLists();
         updateStats();
         renderOptionsList();
 
         const modeText = mode === 'replace' ? '替换' : '追加';
-        showManageMessage(`${modeText}成功，当前共 ${result.total} 家`, 'success');
+        const target = selectedListId === ALL_LISTS_ID ? '' : `（归入「${currentList().name}」）`;
+        showManageMessage(`${modeText}成功，当前共 ${result.total} 家${target}`, 'success');
 
         if (mode === 'replace') {
             textarea.value = '';
@@ -180,11 +202,15 @@ function promptForAdminToken(silent = false) {
 
 function updateTokenBadge() {
     const badge = document.getElementById('token-state');
-    if (!badge) return;
-
     const hasToken = Boolean(getAdminToken());
-    badge.textContent = hasToken ? '已设置管理密钥' : '未设置管理密钥';
-    badge.classList.toggle('is-set', hasToken);
+
+    if (badge) {
+        badge.textContent = hasToken ? '已设置管理密钥' : '未设置管理密钥';
+        badge.classList.toggle('is-set', hasToken);
+    }
+
+    // 密钥状态决定结果页是否出现「从菜单下架」
+    updateResultActions();
 }
 
 function withAdminHeader(options) {
@@ -261,6 +287,323 @@ async function loadOptions({ silent = false } = {}) {
     }
 }
 
+/* ---------------- 榜单与本机排除 ---------------- */
+
+async function loadLists({ silent = true } = {}) {
+    try {
+        lists = await requestJson(`${API_BASE}/lists`);
+
+        // 选中的榜单可能已被删除：回落到「全部」
+        if (selectedListId !== ALL_LISTS_ID && !lists.some((list) => String(list.id) === String(selectedListId))) {
+            selectedListId = ALL_LISTS_ID;
+            try {
+                localStorage.removeItem(SELECTED_LIST_KEY);
+            } catch (error) {
+                // ignore
+            }
+        }
+
+        renderListChips();
+        renderListsAdmin();
+        renderOptionsList();
+        updateStats();
+    } catch (error) {
+        console.error('加载榜单失败:', error);
+        if (!silent) {
+            showManageMessage(`榜单加载失败：${error.message}`, 'error');
+        }
+    }
+}
+
+function currentList() {
+    if (selectedListId === ALL_LISTS_ID) return null;
+    return lists.find((list) => String(list.id) === String(selectedListId)) || null;
+}
+
+function getExcludedIds() {
+    try {
+        const raw = JSON.parse(localStorage.getItem(EXCLUDED_KEY) || '[]');
+        return Array.isArray(raw) ? raw.map(String) : [];
+    } catch (error) {
+        return [];
+    }
+}
+
+function setExcludedIds(ids) {
+    try {
+        const unique = [...new Set(ids.map(String))];
+        if (unique.length) {
+            localStorage.setItem(EXCLUDED_KEY, JSON.stringify(unique));
+        } else {
+            localStorage.removeItem(EXCLUDED_KEY);
+        }
+    } catch (error) {
+        // ignore
+    }
+    renderExclusionNote();
+}
+
+// 当前榜单下的可选池（已剔除本机排除项）
+function getPool() {
+    const base = selectedListId === ALL_LISTS_ID
+        ? foodOptions
+        : foodOptions.filter((option) => (option.lists || []).some((list) => String(list.id) === String(selectedListId)));
+
+    const excluded = new Set(getExcludedIds());
+    return base.filter((option) => !excluded.has(String(option.id)));
+}
+
+function renderExclusionNote() {
+    const note = document.getElementById('exclusion-note');
+    if (!note) return;
+
+    const baseSize = (selectedListId === ALL_LISTS_ID
+        ? foodOptions
+        : foodOptions.filter((option) => (option.lists || []).some((list) => String(list.id) === String(selectedListId)))).length;
+
+    const visible = getPool().length;
+    const hidden = baseSize - visible;
+
+    if (hidden <= 0) {
+        note.hidden = true;
+        note.innerHTML = '';
+        return;
+    }
+
+    note.hidden = false;
+    note.textContent = `本榜单 ${baseSize} 家，本机已隐藏 ${hidden} 家（不影响他人）`;
+
+    const restore = document.createElement('button');
+    restore.type = 'button';
+    restore.className = 'chip-action chip-action-quiet';
+    restore.textContent = '恢复全部';
+    restore.addEventListener('click', () => {
+        setExcludedIds([]);
+        showManageMessage('已恢复本榜单的全部店铺', 'info');
+    });
+    note.appendChild(document.createTextNode(' '));
+    note.appendChild(restore);
+}
+
+function renderListChips() {
+    const containers = ['list-chips', 'manage-list-chips'].map((id) => document.getElementById(id)).filter(Boolean);
+    if (!containers.length) return;
+
+    const total = foodOptions.length;
+
+    containers.forEach((container) => {
+        container.innerHTML = '';
+
+        const allChip = document.createElement('button');
+        allChip.type = 'button';
+        allChip.className = `chip${selectedListId === ALL_LISTS_ID ? ' active' : ''}`;
+        allChip.textContent = `全部 ${total}`;
+        allChip.addEventListener('click', () => selectList(ALL_LISTS_ID));
+        container.appendChild(allChip);
+
+        lists.forEach((list) => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = `chip${String(list.id) === String(selectedListId) ? ' active' : ''}`;
+            chip.textContent = `${list.name} ${list.count}`;
+            chip.addEventListener('click', () => selectList(list.id));
+            container.appendChild(chip);
+        });
+    });
+
+    renderExclusionNote();
+}
+
+function selectList(listId) {
+    selectedListId = listId === ALL_LISTS_ID ? ALL_LISTS_ID : Number(listId) || ALL_LISTS_ID;
+
+    try {
+        if (selectedListId === ALL_LISTS_ID) {
+            localStorage.removeItem(SELECTED_LIST_KEY);
+        } else {
+            localStorage.setItem(SELECTED_LIST_KEY, String(selectedListId));
+        }
+    } catch (error) {
+        // ignore
+    }
+
+    renderListChips();
+    renderOptionsList();
+    renderListsAdmin();
+}
+
+function renderListsAdmin() {
+    const container = document.getElementById('lists-container');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    if (!lists.length) {
+        const empty = document.createElement('p');
+        empty.className = 'options-empty';
+        empty.textContent = '还没有榜单';
+        container.appendChild(empty);
+        return;
+    }
+
+    lists.forEach((list) => {
+        const row = document.createElement('div');
+        row.className = 'list-row';
+
+        const name = document.createElement('span');
+        name.className = 'list-row-name';
+        name.textContent = list.name;
+
+        const count = document.createElement('span');
+        count.className = 'list-row-count';
+        count.textContent = `${list.count} 家`;
+
+        row.appendChild(name);
+        row.appendChild(count);
+
+        const actions = document.createElement('div');
+        actions.className = 'list-row-actions';
+
+        actions.appendChild(createButton('改名', 'option-btn edit', async () => {
+            const input = window.prompt('榜单名称：', list.name);
+            if (input === null) return;
+
+            const nextName = input.trim();
+            if (!nextName || nextName === list.name) return;
+
+            try {
+                await requestJson(`${API_BASE}/lists/${list.id}`, {
+                    method: 'PATCH',
+                    admin: true,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: nextName })
+                });
+                await loadLists();
+                showManageMessage('榜单已改名', 'success');
+            } catch (error) {
+                showManageMessage(`改名失败：${error.message}`, 'error');
+            }
+        }));
+
+        actions.appendChild(createButton('删除', 'option-btn delete', async () => {
+            const ok = window.confirm(`删除榜单「${list.name}」？\n\n只会解除关联，${list.count} 家店铺本身会保留。`);
+            if (!ok) return;
+
+            try {
+                await requestNoContent(`${API_BASE}/lists/${list.id}`, { method: 'DELETE', admin: true });
+                if (String(selectedListId) === String(list.id)) selectList(ALL_LISTS_ID);
+                await Promise.all([loadLists(), loadOptions({ silent: true })]);
+                showManageMessage('榜单已删除，店铺仍保留在「全部」里', 'success');
+            } catch (error) {
+                showManageMessage(`删除失败：${error.message}`, 'error');
+            }
+        }));
+
+        row.appendChild(actions);
+        container.appendChild(row);
+    });
+
+    renderMembershipPicker();
+}
+
+// 「把已有店铺加入当前榜单」的下拉：只列出尚未属于当前榜单的店
+function renderMembershipPicker() {
+    const row = document.getElementById('membership-row');
+    const select = document.getElementById('membership-select');
+    if (!row || !select) return;
+
+    const list = currentList();
+    if (!list) {
+        row.hidden = true;
+        select.innerHTML = '';
+        return;
+    }
+
+    const candidates = foodOptions.filter((option) =>
+        !(option.lists || []).some((item) => String(item.id) === String(list.id))
+    );
+
+    if (!candidates.length) {
+        row.hidden = true;
+        select.innerHTML = '';
+        return;
+    }
+
+    select.innerHTML = '';
+    candidates.forEach((option) => {
+        const element = document.createElement('option');
+        element.value = option.id;
+        element.textContent = `${option.emoji} ${option.name}`;
+        select.appendChild(element);
+    });
+
+    row.hidden = false;
+}
+
+async function createList() {
+    const input = document.getElementById('new-list-name');
+    const name = input.value.trim();
+
+    if (!name) {
+        showManageMessage('请输入榜单名称', 'error');
+        return;
+    }
+
+    try {
+        await requestJson(`${API_BASE}/lists`, {
+            method: 'POST',
+            admin: true,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name })
+        });
+
+        input.value = '';
+        await loadLists();
+        showManageMessage(`榜单「${name}」已创建`, 'success');
+    } catch (error) {
+        showManageMessage(`创建失败：${error.message}`, 'error');
+    }
+}
+
+async function addOptionToCurrentList() {
+    const list = currentList();
+    const select = document.getElementById('membership-select');
+    if (!list || !select || !select.value) return;
+
+    try {
+        await requestJson(`${API_BASE}/lists/${list.id}/membership`, {
+            method: 'POST',
+            admin: true,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'add', optionIds: [Number(select.value)] })
+        });
+
+        await Promise.all([loadLists(), loadOptions({ silent: true })]);
+        renderListChips();
+        showManageMessage('已加入当前榜单', 'success');
+    } catch (error) {
+        showManageMessage(`加入失败：${error.message}`, 'error');
+    }
+}
+
+async function removeOptionFromList(option, listId) {
+    try {
+        await requestJson(`${API_BASE}/lists/${listId}/membership`, {
+            method: 'POST',
+            admin: true,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'remove', optionIds: [Number(option.id)] })
+        });
+
+        await Promise.all([loadLists(), loadOptions({ silent: true })]);
+        renderListChips();
+        showManageMessage('已从该榜单移出（店铺本身保留）', 'success');
+    } catch (error) {
+        showManageMessage(`移出失败：${error.message}`, 'error');
+    }
+}
+
+
 function updateStats() {
     document.getElementById('total-options').textContent = foodOptions.length;
     updateTodayCount();
@@ -297,12 +640,29 @@ function incrementTodayCount() {
 }
 
 function getRandomFood() {
-    if (foodOptions.length === 0) {
+    let pool = getPool();
+
+    // 排除到空池时自动放行，并提示一句 —— 而不是让抽签卡死
+    if (pool.length === 0 && getExcludedIds().length > 0) {
+        setExcludedIds([]);
+        pool = getPool();
+        showResultNote('本榜单的店铺都被隐藏过了，已自动恢复全部可选');
+    }
+
+    if (pool.length === 0) {
         return { name: '请先添加餐饮选项', emoji: '🍽️' };
     }
 
-    const randomIndex = Math.floor(Math.random() * foodOptions.length);
-    return foodOptions[randomIndex];
+    const randomIndex = Math.floor(Math.random() * pool.length);
+    return pool[randomIndex];
+}
+
+function showResultNote(text) {
+    const note = document.getElementById('result-note');
+    if (!note) return;
+
+    note.hidden = !text;
+    note.textContent = text || '';
 }
 
 const PREFERS_REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -367,15 +727,66 @@ function animateResult() {
         }
 
         const finalFood = getRandomFood();
+        lastResult = finalFood && finalFood.id ? finalFood : null;
         emojiElement.textContent = finalFood.emoji;
         resultElement.textContent = finalFood.name;
         resultContainer.classList.add('revealed');
         celebrate(resultContainer);
         incrementTodayCount();
+        updateResultActions();
         isAnimating = false;
     };
 
     tick();
+}
+
+// 结果页的次级动作：带密钥的设备才显示「从菜单下架」，其他人只有本机隐藏
+function updateResultActions() {
+    const skipBtn = document.getElementById('skip-btn');
+    const delistBtn = document.getElementById('delist-btn');
+
+    const enabled = Boolean(lastResult && lastResult.id);
+    if (skipBtn) skipBtn.disabled = !enabled;
+    if (delistBtn) {
+        delistBtn.hidden = !(enabled && getAdminToken());
+        delistBtn.disabled = false;
+    }
+}
+
+async function skipCurrentResult() {
+    if (!lastResult || !lastResult.id) return;
+
+    const excluded = getExcludedIds();
+    excluded.push(String(lastResult.id));
+    setExcludedIds(excluded);
+
+    showResultNote(`已在本机隐藏「${lastResult.name}」，不影响其他访客`);
+    animateResult();
+}
+
+async function delistCurrentResult() {
+    if (!lastResult || !lastResult.id) return;
+
+    const ok = window.confirm(
+        `把「${lastResult.name}」从菜单彻底下架？\n\n这会删掉这家店本身（所有榜单都会消失），不可撤销。` +
+        `\n如果只想暂时不看它，请改用「最近不想吃」。`
+    );
+    if (!ok) return;
+
+    try {
+        await requestNoContent(`${API_BASE}/options/${lastResult.id}`, { method: 'DELETE', admin: true });
+
+        const removedId = String(lastResult.id);
+        lastResult = null;
+        setExcludedIds(getExcludedIds().filter((id) => id !== removedId));
+
+        await Promise.all([loadOptions({ silent: true }), loadLists()]);
+        switchScreen('start-screen');
+        showManageMessage('该店铺已从菜单下架', 'success');
+    } catch (error) {
+        showResultNote('');
+        showManageMessage(`下架失败：${error.message}`, 'error');
+    }
 }
 
 function startAnimation() {
@@ -425,7 +836,12 @@ function switchScreen(screenId) {
     if (screenId === 'manage-screen') {
         document.getElementById('manage-btn').classList.add('active');
         loadOptions({ silent: true });
+        loadLists();
         renderOptionsList();
+    }
+
+    if (screenId === 'result-screen') {
+        updateResultActions();
     }
 }
 
@@ -460,7 +876,11 @@ async function addFoodOption() {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ name, emoji })
+            body: JSON.stringify(
+                selectedListId === ALL_LISTS_ID
+                    ? { name, emoji }
+                    : { name, emoji, listIds: [Number(selectedListId)] }
+            )
         });
 
         foodOptions.push(newOption);
@@ -576,17 +996,39 @@ function createOptionView(option) {
     name.className = 'option-name';
     name.textContent = option.name;
 
+    content.appendChild(emoji);
+    content.appendChild(name);
+
+    // 所属榜单标签
+    const tags = document.createElement('span');
+    tags.className = 'option-tags';
+    (option.lists || []).forEach((list) => {
+        const tag = document.createElement('span');
+        tag.className = 'option-tag';
+        tag.textContent = list.name;
+        tags.appendChild(tag);
+    });
+
+    if (getExcludedIds().includes(String(option.id))) {
+        const hiddenTag = document.createElement('span');
+        hiddenTag.className = 'option-tag option-tag-hidden';
+        hiddenTag.textContent = '本机已隐藏';
+        tags.appendChild(hiddenTag);
+    }
+
+    content.appendChild(tags);
+
     const actions = document.createElement('div');
     actions.className = 'option-actions';
 
-    const editBtn = createButton('编辑', 'option-btn edit', () => startEditingOption(option.id));
-    const deleteBtn = createButton('删除', 'option-btn delete', () => deleteFoodOption(option.id));
+    const activeList = currentList();
 
-    actions.appendChild(editBtn);
-    actions.appendChild(deleteBtn);
+    if (activeList && (option.lists || []).some((list) => String(list.id) === String(activeList.id))) {
+        actions.appendChild(createButton('移出本榜', 'option-btn quiet', () => removeOptionFromList(option, activeList.id)));
+    }
 
-    content.appendChild(emoji);
-    content.appendChild(name);
+    actions.appendChild(createButton('编辑', 'option-btn edit', () => startEditingOption(option.id)));
+    actions.appendChild(createButton('删除', 'option-btn delete', () => deleteFoodOption(option.id)));
 
     optionItem.appendChild(content);
     optionItem.appendChild(actions);
@@ -637,9 +1079,15 @@ function createOptionEditView(option) {
 
 function renderOptionsList() {
     const container = document.getElementById('options-container');
+    if (!container) return;
+
     container.innerHTML = '';
 
-    if (foodOptions.length === 0) {
+    const visible = selectedListId === ALL_LISTS_ID
+        ? foodOptions
+        : foodOptions.filter((option) => (option.lists || []).some((list) => String(list.id) === String(selectedListId)));
+
+    if (!foodOptions.length) {
         const emptyState = document.createElement('p');
         emptyState.className = 'options-empty';
         emptyState.textContent = '暂无选项，请先添加';
@@ -647,7 +1095,15 @@ function renderOptionsList() {
         return;
     }
 
-    foodOptions.forEach((option) => {
+    if (!visible.length) {
+        const emptyState = document.createElement('p');
+        emptyState.className = 'options-empty';
+        emptyState.textContent = `「${(currentList() || {}).name || '该榜单'}」里还没有店铺，可在「榜单管理」里加入`;
+        container.appendChild(emptyState);
+        return;
+    }
+
+    visible.forEach((option) => {
         const item = editingOptionId === option.id
             ? createOptionEditView(option)
             : createOptionView(option);
@@ -694,6 +1150,7 @@ function createFloatingEmojis() {
 
 document.addEventListener('DOMContentLoaded', () => {
     loadOptions();
+    loadLists();
     createFloatingEmojis();
 
     const startBtn = document.getElementById('start-btn');
@@ -722,6 +1179,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (importAppendBtn) importAppendBtn.addEventListener('click', () => runImport('append'));
     if (importReplaceBtn) importReplaceBtn.addEventListener('click', () => runImport('replace'));
+
+    const skipBtn = document.getElementById('skip-btn');
+    const delistBtn = document.getElementById('delist-btn');
+    const createListBtn = document.getElementById('create-list-btn');
+    const membershipAddBtn = document.getElementById('membership-add-btn');
+
+    if (skipBtn) skipBtn.addEventListener('click', skipCurrentResult);
+    if (delistBtn) delistBtn.addEventListener('click', delistCurrentResult);
+    if (createListBtn) createListBtn.addEventListener('click', createList);
+    if (membershipAddBtn) membershipAddBtn.addEventListener('click', addOptionToCurrentList);
 
     const tokenSetBtn = document.getElementById('token-set-btn');
     const tokenClearBtn = document.getElementById('token-clear-btn');
