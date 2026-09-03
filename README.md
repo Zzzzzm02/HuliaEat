@@ -87,7 +87,7 @@ npm start
 
 访问 `http://localhost:3000`（端口取决于 `.env` 里的 `PORT`；被占用时改 `.env`，或前面加 `PORT=3210`）。
 
-启动时若 `public` 里还没有表，会自动跑完 `migrations/` 再用种子灌数据。只想快速跑起来、不关心鉴权，把 `ADMIN_TOKEN` 留空即可 —— 写接口会开放，启动日志会警告，且这种配置绝对不要 `HOST=0.0.0.0` 暴露到公网。
+启动时若数据库 `public` schema 里还没有表，会自动跑完 `migrations/` 再用种子灌数据。只想快速跑起来、不关心鉴权，把 `ADMIN_TOKEN` 留空即可 —— 写接口会开放，启动日志会警告，且这种配置绝对不要 `HOST=0.0.0.0` 暴露到公网。
 
 ## Docker Compose 部署（推荐）
 
@@ -100,6 +100,39 @@ docker compose up -d --build
 `ADMIN_TOKEN` / `POSTGRES_PASSWORD` 缺失时 compose 会直接报错退出，不会带着默认口令上线。数据库端口刻意不对宿主机发布，只有 app 容器能访问它。
 
 如果服务放在 Nginx 之后，记得在 `.env` 里设 `TRUST_PROXY=true`；前后端不同源时把对外域名写进 `CORS_ALLOWED_ORIGINS`。
+
+### 上线前检查清单
+
+- [ ] `.env` 里的 `ADMIN_TOKEN` 和 `POSTGRES_PASSWORD` 都换成了随机长值（生成命令见上），与任何示例/文档里的字面值都不同
+- [ ] `APP_PORT` 按需调整（默认 3000）
+- [ ] **HTTPS 已就位**（Nginx / Caddy 证书或托管平台自带）—— 没有它，管理密钥就是明文过网，Service Worker 也不会生效
+- [ ] 反代之后设 `TRUST_PROXY=true`，否则限流把所有访客算成同一个 IP
+- [ ] 首次 `docker compose up -d --build` 后看一眼 app 容器日志：空库应出现 3 条「已应用迁移」+ 1 条种子初始化
+- [ ] `curl https://你的域名/api/health` 返回 `"status":"ok"`，且手机能打开页面
+
+## 升级与数据安全
+
+升级一个已部署的实例：
+
+```bash
+git pull
+docker compose up -d --build    # 容器启动时自动把新迁移跑完，无需手动步骤
+```
+
+- 迁移**只进不退**：`migrations/NNN_*.sql` 没有 down 版本。回滚代码前先确认旧代码与当前表结构兼容；大改前先 `npm run export` 留快照就是这个原因。
+- 定期从宿主机备份数据库（compose 的 5432 刻意不对宿主机发布，所以走 `docker compose exec`）：
+
+```bash
+docker compose exec -T db pg_dump -U huliaeat huliaeat > backup-$(date +%F).sql
+```
+
+恢复（会覆盖现库，先想三秒）：
+
+```bash
+cat backup-2026-09-03.sql | docker compose exec -T db psql -U huliaeat -d huliaeat
+```
+
+- 只是手滑改坏了菜单、不想碰数据库？把 git 历史里任意一版 `data/options.json` 的内容，通过管理页「批量导入 → 替换全部」灌回去即可。
 
 ## API
 
@@ -175,6 +208,14 @@ schema_migrations(name, applied_at)     ← 已执行的迁移
 
 改完榜单顺手 `npm run export` 一次并提交即可。另有一份 `pg_dump` 级的紧急备份放在 `data/backups/`（**已 gitignore**，不进仓库）。
 
+## PWA：添加到主屏幕
+
+- 手机浏览器打开站点 → 分享/菜单 → **添加到主屏幕**，之后从桌面图标进入就是独立窗口（无地址栏），图标用的是狐狸头像。
+- 缓存策略（详见 `sw.js` 头部注释）：`/api/*` 永不缓存；图标与大图缓存优先；页面和脚本网络优先、断网回退上次缓存。
+- **发版后想让访客立刻拿到新前端**：把 `sw.js` 里的 `CACHE = 'huliaeat-v1'` 版本号 +1，旧缓存整体作废；普通改动（改店铺数据）不涉及缓存，无需动它。
+- Service Worker 只在 **HTTPS 或 localhost** 生效；纯 HTTP 的 IP 地址上自动降级成普通网页，功能不受影响，只是没有离线兜底和桌面图标。
+- 图标在 `icons/`（192/512/180 三张），由 `image1/eateat.jpg` 居中裁切生成，想换独立设计直接替换这三张 PNG 即可。
+
 ## 已知待办
 
 - 暂无单元测试框架，只有 `scripts/smoke.sh`（CI 已接入，跑的是接口级冒烟）
@@ -212,3 +253,12 @@ schema_migrations(name, applied_at)     ← 已执行的迁移
 │   └── backups/            # pg_dump 紧急备份（gitignore，也不进镜像）
 └── README.md
 ```
+
+## 更新记录
+
+- **2026-09-03 · `51c777c`** — 店名唯一约束（`003` 迁移合并既有重名行 + 单条/编辑重名一律 409）；`emoji-rules.js` 让关键词→Emoji 表前后端共用一份，纯 API 导入也能自动配图；PWA（manifest + Service Worker + 三张图标）；`.dockerignore` 补漏（备份目录不再进镜像）
+- **2026-09-02 · `8bc7e38`** — 修 CI 暴露的可移植性问题（`mktemp -t` 是 BSD 写法，GNU 下导致服务起不来）；运行时 Node 20（已 EOL）→ 22；checkout/setup-node 升 v7；冒烟失败细节改为 `::error::` annotation，公开 API 可读
+- **2026-09-02 · `cfaeee3`** — 多榜单：`lists` / `list_items` 多对多 + 首页榜单切换 + 管理页建榜/改名/移店；`migrations/` 启动时自动执行（001 基线、002 多榜单 + 存量回填）；结果页「最近不想吃」本机排除与「下架」分离；`HOST` 默认只绑回环；`npm run export` 快照（兼作空库种子）；18 家占位 🍽️ 全部配上手挑图标
+- **2026-09-02 · `27e4481`** — 安全加固：全部写接口要求管理密钥（常数时间比较 + IP 级爆破限流）、静态资源白名单、跨域写白名单、production 缺密钥拒绝启动；冒烟测试上线（后扩到 83 项）并接入 GitHub Actions
+- **2026-07-23 · `90e6184`** — PostgreSQL 持久化 + Docker 部署 + 界面重做 + 必吃榜批量导入
+- **2026-03-31 · `e3b54d7` / `df55154`** — 初始版本：前端三屏 + 后端雏形
