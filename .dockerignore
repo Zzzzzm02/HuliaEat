@@ -6,3 +6,7 @@ yarn-error.log*
 .git
 .gitignore
 .env
+
+# 运行镜像不需要仓库元数据，更不能把本机 pg_dump 备份打进镜像
+.github
+data/backups

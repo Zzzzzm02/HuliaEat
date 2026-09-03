@@ -1,5 +1,7 @@
 # 狐狸今天吃什么
 
+[![冒烟测试](https://github.com/Zzzzzm02/HuliaEat/actions/workflows/smoke.yml/badge.svg)](https://github.com/Zzzzzm02/HuliaEat/actions/workflows/smoke.yml)
+
 一个可上线的餐饮随机选择应用，支持完整 CRUD（增删改查）并使用 PostgreSQL 持久化，适合部署到任意服务器。
 
 ## 关键特性
@@ -8,7 +10,9 @@
 - **多榜单**：一家店可同时属于多个榜单（杭州榜 / 日常食堂 / 请客榜…），首页顶部一键切换
 - 抽到不想吃的店可「最近不想吃」当场排除，**只影响本机**，不波及他人；有密钥的人可直接下架
 - 管理页支持新增、编辑、删除、批量导入、榜单增删改名与店铺归类
+- **店名全库唯一**：单条新增与批量导入都按名去重，不会出现两行同一家店
 - 后端完整 REST API，**写接口受管理密钥保护**
+- **PWA**：手机浏览器「添加到主屏幕」后以独立窗口打开，图标齐全；断网时至少能打开上次的界面
 - PostgreSQL 持久化（跨服务器、跨重启不丢），**启动时自动按序执行 `migrations/` 里的 SQL**
 - `data/options.json` 既是空库种子，也是**当前数据的版本化快照**（`npm run export` 生成）
 - Docker / Docker Compose 部署
@@ -20,7 +24,7 @@
 |---|---|
 | 读接口（`GET /api/health`、`GET /api/options`、`GET /api/options/:id`、`GET /api/lists`） | 公开，任何人可抽一次吃的；跨域读取也开放 |
 | 写接口（`POST/PUT/PATCH/DELETE /api/options*`、`POST/PATCH/DELETE /api/lists*`、`POST /api/lists/:id/membership`） | 需要管理密钥；`import` 的 `replace` 模式会 `TRUNCATE` 整表，务必保管好密钥 |
-| 静态资源 | 仅 `/`、`/styles.css`、`/script.js`、`/image1/*`，其余（源码、`data/`、`.git/`）返回 404 |
+| 静态资源 | 仅 `/`、`/styles.css`、`/script.js`、`/emoji-rules.js`、`/sw.js`、`/manifest.webmanifest`、`/icons/*`、`/image1/*`，其余（源码、`data/`、`.git/`）返回 404 |
 
 写接口密钥通过 `x-admin-token: <ADMIN_TOKEN>` 或 `Authorization: Bearer <ADMIN_TOKEN>` 头传递。管理页首次触发写操作时会弹窗索取密钥，输入后保存在浏览器 `localStorage`，可在「管理选项」页顶部重新设置或清除。
 
@@ -115,9 +119,9 @@ curl -X POST http://localhost:3000/api/options \
 | `GET /api/health` | 公开 | 健康检查，含当前店铺总数 |
 | `GET /api/options` | 公开 | 全量店铺，每条含 `lists: [{id,name}]`；`?list=<榜单id>` 可按榜过滤 |
 | `GET /api/options/:id` | 公开 | 单条 |
-| `POST /api/options` | 密钥 | Body `{name, emoji, listIds?: [1,2]}`；不给 `listIds` 时归入默认榜单 |
-| `PUT /api/options/:id` | 密钥 | 全量更新 name / emoji |
-| `PATCH /api/options/:id` | 密钥 | 部分更新 |
+| `POST /api/options` | 密钥 | Body `{name, emoji, listIds?: [1,2]}`；不给 `listIds` 时归入默认榜单；重名返回 **409** |
+| `PUT /api/options/:id` | 密钥 | 全量更新 name / emoji；改成已有店名返回 **409** |
+| `PATCH /api/options/:id` | 密钥 | 部分更新；同上 |
 | `DELETE /api/options/:id` | 密钥 | **删除店铺本身**，连带解除它在所有榜单里的关联 |
 | `POST /api/options/import` | 密钥 | Body `{mode:"append"\|"replace", items:[{name,emoji}], listId?}`；重名不新建行而是复用并挂进目标榜；`replace` 会 `TRUNCATE` 店铺与全部关联，**不可撤销** |
 
@@ -139,7 +143,7 @@ curl -X POST http://localhost:3000/api/options \
 npm run smoke
 ```
 
-`scripts/smoke.sh` 会在一个**临时 PostgreSQL schema** 中跑完 75 项断言（鉴权、静态越界读取、跨域写、爆破限流、启动策略、CRUD、批量导入、多榜单语义），结束即 `drop schema`，不触碰 `public` 的正式数据。需要本机 PostgreSQL 可用且账号有建 schema 的权限。
+`scripts/smoke.sh` 会在一个**临时 PostgreSQL schema** 中跑完 83 项断言（鉴权、静态越界读取、跨域写、爆破限流、启动策略、CRUD、批量导入、多榜单语义、PWA 静态资源），结束即 `drop schema`，不触碰 `public` 的正式数据。需要本机 PostgreSQL 可用且账号有建 schema 的权限。
 
 连接信息一律来自环境，**脚本里不内置任何默认口令**：优先读仓库根目录的 `.env`，也可用 `SMOKE_PGHOST` / `SMOKE_PGPORT` / `SMOKE_PGDATABASE` / `SMOKE_PGUSER` / `SMOKE_PGPASSWORD` 覆盖；拿不到就退出码 2。测试用密钥每次随机生成，不落盘。
 
@@ -173,11 +177,9 @@ schema_migrations(name, applied_at)     ← 已执行的迁移
 
 ## 已知待办
 
-- `name` 尚无唯一约束，单条 `POST` 重名仍会成功（导入路径已按名去重复用）
 - 暂无单元测试框架，只有 `scripts/smoke.sh`（CI 已接入，跑的是接口级冒烟）
 - 权限模型是**单一共享密钥**（存在浏览器 `localStorage`），足以防止路人误改/清空菜单，但没有多用户账号与操作审计；若将来要开放多人分别管理，需要改造成 session / 用户表方案
-- HTTPS 不在应用层强制，需由反向代理（Nginx / Caddy）或托管平台提供。**在没有 HTTPS 的地址上使用管理密钥 = 密钥明文过网**，公网部署务必先套 TLS
-- Emoji 关键词规则目前只写在前端的 `EMOJI_RULES` 里，后端 `import` 的兜底是通用 `🍽️`；若将来出现不带前端的导入调用方，需要把规则挪到共享位置
+- HTTPS 不在应用层强制，需由反向代理（Nginx / Caddy）或托管平台提供。**在没有 HTTPS 的地址上使用管理密钥 = 密钥明文过网**，公网部署务必先套 TLS；Service Worker 也只在 HTTPS / localhost 生效
 - 本机 Homebrew PostgreSQL 用 `trust` 认证且只监听回环，因此 `ALTER USER ... PASSWORD` 在本地不起实际门禁作用（口令轮换的意义在于别把跟仓库示例相同的值带上线）
 
 ## 项目结构
@@ -187,12 +189,17 @@ schema_migrations(name, applied_at)     ← 已执行的迁移
 ├── index.html              # 单页前端（首页 / 结果 / 管理三屏）
 ├── styles.css              # 暖色「狐狸食堂」主题
 ├── script.js               # 前端逻辑 + 榜单切换 + 本机排除 + 管理密钥处理
+├── emoji-rules.js          # 关键词→Emoji 规则，前后端共用唯一一份
+├── sw.js                   # Service Worker（缓存策略写在文件头注释里）
+├── manifest.webmanifest    # PWA 清单
+├── icons/                  # 应用图标 192/512/180（由 image1/eateat.jpg 居中裁切，可自行替换）
 ├── server.js               # Express API + 鉴权 / CORS / 静态白名单 + 迁移执行
 ├── migrations/
 │   ├── 001_init.sql        # 基线结构（幂等）
-│   └── 002_lists.sql       # 多榜单 + 存量数据回填
+│   ├── 002_lists.sql       # 多榜单 + 存量数据回填
+│   └── 003_unique_name.sql # 店名唯一 + 既有重名行合并
 ├── scripts/
-│   ├── smoke.sh            # 安全与接口冒烟测试（75 项断言）
+│   ├── smoke.sh            # 安全与接口冒烟测试（83 项断言）
 │   └── export-snapshot.js  # 数据库 → data/options.json 快照
 ├── .github/workflows/
 │   └── smoke.yml           # CI：一次性 postgres:16 服务容器跑冒烟
@@ -202,6 +209,6 @@ schema_migrations(name, applied_at)     ← 已执行的迁移
 ├── .env.example
 ├── data/
 │   ├── options.json        # 种子 = 快照（受 git 跟踪）
-│   └── backups/            # pg_dump 紧急备份（已 gitignore）
+│   └── backups/            # pg_dump 紧急备份（gitignore，也不进镜像）
 └── README.md
 ```

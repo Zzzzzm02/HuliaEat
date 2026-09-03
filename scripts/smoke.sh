@@ -213,13 +213,15 @@ expect_code "POST 返回新 id（${NEW_ID}）" "ok" "$([ -n "$NEW_ID" ] && echo 
 expect_code "GET 单条 → 200" 200 "$(code "${BASE}/api/options/${NEW_ID}")"
 expect_code "PUT 全量更新 → 200" 200 "$(code -X PUT "${BASE}/api/options/${NEW_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"冒烟小火锅2","emoji":"🍲"}')"
 expect_code "PATCH 部分更新 → 200" 200 "$(code -X PATCH "${BASE}/api/options/${NEW_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"emoji":"🌶️"}')"
-expect_code "重名仍可写（唯一约束属 P1，本次不改行为）" 201 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"冒烟小火锅2","emoji":"🍲"}')"
+expect_code "重名 POST → 409（店名唯一，与导入路径语义一致）" 409 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"冒烟小火锅2","emoji":"🍲"}')"
 expect_code "DELETE → 204" 204 "$(code -X DELETE "${BASE}/api/options/${NEW_ID}" -H "x-admin-token: ${TOKEN}")"
 expect_code "删除后 GET → 404" 404 "$(code "${BASE}/api/options/${NEW_ID}")"
 
 # ---------------------------------------------------------------- 导入
 section "批量导入（append / replace）"
 expect_code "import append 带密钥 → 200" 200 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"append","items":[{"name":"导入甲","emoji":"🍜"},{"name":"导入乙","emoji":"🍚"}]}')"
+NO_EMOJI_RESULT=$(body -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"append","items":[{"name":"测试面馆无图标"}]}' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const o=JSON.parse(s).options.find((x)=>x.name==="测试面馆无图标");console.log(o?o.emoji:"missing")})')
+expect_code "导入缺 emoji 时按前后端共用规则自动匹配（面→🍜）" "🍜" "$NO_EMOJI_RESULT"
 expect_code "import replace 带密钥 → 200" 200 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"replace","items":[{"name":"替换后只剩这家","emoji":"🦆"}]}')"
 expect_code "replace 后总数为 1" 1 "$(count_of "${BASE}/api/options")"
 expect_code "空 items → 400" 400 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"append","items":[]}')"
@@ -277,6 +279,13 @@ expect_code "GET / 返回 HTML" "text/html; charset=UTF-8" "$(ctype "${BASE}/")"
 expect_code "GET /styles.css → 200" 200 "$(code "${BASE}/styles.css")"
 expect_code "GET /script.js → 200" 200 "$(code "${BASE}/script.js")"
 expect_code "GET /image1/eateat.jpg → 200" 200 "$(code "${BASE}/image1/eateat.jpg")"
+expect_code "GET /emoji-rules.js → 200" 200 "$(code "${BASE}/emoji-rules.js")"
+expect_code "GET /manifest.webmanifest → 200" 200 "$(code "${BASE}/manifest.webmanifest")"
+expect_code "manifest 的 Content-Type 正确" "application/manifest+json; charset=utf-8" "$(ctype "${BASE}/manifest.webmanifest")"
+expect_code "GET /sw.js → 200" 200 "$(code "${BASE}/sw.js")"
+expect_code "sw.js 必须即时失效（no-cache），否则发版卡在旧缓存" "no-cache" "$(header_value "${BASE}/sw.js" "cache-control")"
+expect_code "GET /icons/icon-192.png → 200" 200 "$(code "${BASE}/icons/icon-192.png")"
+expect_code "图标返回 PNG" "image/png" "$(ctype "${BASE}/icons/icon-192.png")"
 for hidden in README.md package.json package-lock.json Dockerfile docker-compose.yml server.js script.js.map data/options.json image1/eateat.jpg.bak; do
     expect_code "禁止读取 /${hidden}" 404 "$(code "${BASE}/${hidden}")"
 done

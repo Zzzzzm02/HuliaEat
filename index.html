@@ -8,6 +8,11 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,500&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
+    <!-- PWA：手机浏览器「添加到主屏幕」后以独立窗口打开 -->
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#E7631C">
+    <link rel="apple-touch-icon" href="/icons/icon-180.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
 </head>
 <body>
     <!-- 环境氛围层：柔光 + 纸纹 + 漂浮元素 -->
@@ -166,6 +171,7 @@
         </footer>
     </div>
 
+    <script src="emoji-rules.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

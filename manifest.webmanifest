@@ -1,0 +1,16 @@
+{
+  "name": "狐狸今天吃什么",
+  "short_name": "今天吃什么",
+  "description": "和朋友一起抽一顿：多榜单、本机排除、管理密钥",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFFDF8",
+  "theme_color": "#E7631C",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

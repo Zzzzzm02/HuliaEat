@@ -25,21 +25,8 @@ try {
     // localStorage 不可用时保持「全部」
 }
 
-/* 关键词 → Emoji 自动匹配（自上而下，先匹配先生效） */
-const EMOJI_RULES = [
-    ['火锅', '🍲'], ['串串', '🍢'], ['烧烤', '🍢'],
-    ['虾', '🦐'], ['蟹', '🦀'], ['海鲜', '🦐'], ['鱼', '🐟'],
-    ['鸭', '🦆'], ['鸡', '🍗'],
-    ['牛', '🥩'], ['羊', '🥩'], ['肉', '🥩'], ['排', '🥩'], ['烤', '🍢'],
-    ['面', '🍜'], ['粉', '🍜'],
-    ['生煎', '🥟'], ['饺', '🥟'], ['馄饨', '🥟'], ['包子', '🥟'], ['点心', '🥟'], ['小吃', '🥢'],
-    ['粥', '🥣'], ['饭', '🍚'],
-    ['寿司', '🍣'], ['日料', '🍣'], ['刺身', '🍣'],
-    ['披萨', '🍕'], ['汉堡', '🍔'], ['咖喱', '🍛'],
-    ['甜品', '🍰'], ['蛋糕', '🍰'], ['糖', '🍬'],
-    ['奶茶', '🧋'], ['豆浆', '🥛'], ['咖啡', '☕'], ['茶', '🍵'],
-    ['沙拉', '🥗'], ['凉拌', '🥗'], ['素', '🥗']
-];
+/* 关键词 → Emoji 自动匹配：表在 /emoji-rules.js，与后端共用唯一一份，别在这里再复制 */
+const EMOJI_RULES = window.HULIA_EMOJI_RULES || [];
 
 const DEFAULT_IMPORT_EMOJI = '🍽️';
 
@@ -1152,6 +1139,15 @@ document.addEventListener('DOMContentLoaded', () => {
     loadOptions();
     loadLists();
     createFloatingEmojis();
+
+    // PWA：只在安全上下文注册（localhost / HTTPS）；失败静默，不影响普通使用
+    if ('serviceWorker' in navigator) {
+        const isSecure = window.location.protocol === 'https:'
+            || ['localhost', '127.0.0.1'].includes(window.location.hostname);
+        if (isSecure) {
+            navigator.serviceWorker.register('/sw.js').catch(() => { /* 忽略 */ });
+        }
+    }
 
     const startBtn = document.getElementById('start-btn');
     const retryBtn = document.getElementById('retry-btn');

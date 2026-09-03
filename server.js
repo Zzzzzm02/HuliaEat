@@ -4,6 +4,8 @@ const fs = require('fs/promises');
 const fsSync = require('fs');
 const crypto = require('crypto');
 const { Pool } = require('pg');
+// 与前端共用一份关键词表（见 emoji-rules.js 顶部说明）
+const EMOJI_RULES = require('./emoji-rules');
 
 /*
  * 轻量 .env 装载（约 15 行，故意不引入 dotenv）。
@@ -92,7 +94,14 @@ const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 // 只显式放行前端真正需要的资源，避免把仓库内容（README / package.json / data / .git）整体暴露出去
 const SERVED_FILES = new Map([
     ['/styles.css', { file: 'styles.css', type: 'text/css; charset=utf-8' }],
-    ['/script.js', { file: 'script.js', type: 'application/javascript; charset=utf-8' }]
+    ['/script.js', { file: 'script.js', type: 'application/javascript; charset=utf-8' }],
+    ['/emoji-rules.js', { file: 'emoji-rules.js', type: 'application/javascript; charset=utf-8' }],
+    // PWA：sw.js 必须 no-cache，否则更新会卡在浏览器缓存上
+    ['/manifest.webmanifest', { file: 'manifest.webmanifest', type: 'application/manifest+json; charset=utf-8' }],
+    ['/sw.js', { file: 'sw.js', type: 'application/javascript; charset=utf-8', cache: 'no-cache' }],
+    ['/icons/icon-192.png', { file: 'icons/icon-192.png', type: 'image/png', cache: 'public, max-age=604800' }],
+    ['/icons/icon-512.png', { file: 'icons/icon-512.png', type: 'image/png', cache: 'public, max-age=604800' }],
+    ['/icons/icon-180.png', { file: 'icons/icon-180.png', type: 'image/png', cache: 'public, max-age=604800' }]
 ]);
 
 function parseOrigin(value) {
@@ -368,6 +377,14 @@ function validatePayload(payload, { partial = false } = {}) {
     return { ok: true, data: result };
 }
 
+// 与前端 script.js 的 guessEmoji 同一套规则（表来自 emoji-rules.js）
+function guessEmoji(name) {
+    for (const [keyword, emoji] of EMOJI_RULES) {
+        if (name.includes(keyword)) return emoji;
+    }
+    return '🍽️';
+}
+
 function normalizeImportItem(item) {
     if (!item || typeof item !== 'object') return null;
 
@@ -375,7 +392,7 @@ function normalizeImportItem(item) {
     if (!name || name.length > MAX_NAME_LENGTH) return null;
 
     let emoji = normalizeText(item.emoji);
-    if (!emoji || emoji.length > MAX_EMOJI_LENGTH) emoji = '🍽️';
+    if (!emoji || emoji.length > MAX_EMOJI_LENGTH) emoji = guessEmoji(name);
 
     return { name, emoji };
 }
@@ -584,6 +601,9 @@ app.get('/', (req, res) => {
 
 for (const [route, meta] of SERVED_FILES) {
     app.get(route, (req, res) => {
+        if (meta.cache) {
+            res.set('Cache-Control', meta.cache);
+        }
         res.type(meta.type).sendFile(path.join(__dirname, meta.file));
     });
 }
@@ -924,6 +944,9 @@ app.post('/api/options', requireAdmin, async (req, res, next) => {
             client.release();
         }
     } catch (error) {
+        if (error && error.code === '23505') {
+            return res.status(409).json({ error: '已有同名店铺（改名或直接用现有的）' });
+        }
         return next(error);
     }
 });
@@ -956,6 +979,9 @@ app.put('/api/options/:id', requireAdmin, async (req, res, next) => {
 
         return res.json(result.rows[0]);
     } catch (error) {
+        if (error && error.code === '23505') {
+            return res.status(409).json({ error: '已有同名店铺（改名或直接用现有的）' });
+        }
         return next(error);
     }
 });
@@ -997,6 +1023,9 @@ app.patch('/api/options/:id', requireAdmin, async (req, res, next) => {
 
         return res.json(updatedResult.rows[0]);
     } catch (error) {
+        if (error && error.code === '23505') {
+            return res.status(409).json({ error: '已有同名店铺（改名或直接用现有的）' });
+        }
         return next(error);
     }
 });
