@@ -176,7 +176,7 @@ curl -X POST http://localhost:3000/api/options \
 npm run smoke
 ```
 
-`scripts/smoke.sh` 会在一个**临时 PostgreSQL schema** 中跑完 83 项断言（鉴权、静态越界读取、跨域写、爆破限流、启动策略、CRUD、批量导入、多榜单语义、PWA 静态资源），结束即 `drop schema`，不触碰 `public` 的正式数据。需要本机 PostgreSQL 可用且账号有建 schema 的权限。
+`scripts/smoke.sh` 会在一个**临时 PostgreSQL schema** 中跑完 90 项断言（鉴权、静态越界读取、跨域写、爆破限流、启动策略、CRUD、批量导入、多榜单语义、PWA 静态资源），结束即 `drop schema`，不触碰 `public` 的正式数据。需要本机 PostgreSQL 可用且账号有建 schema 的权限。
 
 连接信息一律来自环境，**脚本里不内置任何默认口令**：优先读仓库根目录的 `.env`，也可用 `SMOKE_PGHOST` / `SMOKE_PGPORT` / `SMOKE_PGDATABASE` / `SMOKE_PGUSER` / `SMOKE_PGPASSWORD` 覆盖；拿不到就退出码 2。测试用密钥每次随机生成，不落盘。
 
@@ -240,7 +240,7 @@ schema_migrations(name, applied_at)     ← 已执行的迁移
 │   ├── 002_lists.sql       # 多榜单 + 存量数据回填
 │   └── 003_unique_name.sql # 店名唯一 + 既有重名行合并
 ├── scripts/
-│   ├── smoke.sh            # 安全与接口冒烟测试（83 项断言）
+│   ├── smoke.sh            # 安全与接口冒烟测试（90 项断言）
 │   └── export-snapshot.js  # 数据库 → data/options.json 快照
 ├── .github/workflows/
 │   └── smoke.yml           # CI：一次性 postgres:16 服务容器跑冒烟

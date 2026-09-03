@@ -307,8 +307,11 @@ function normalizeText(value) {
 }
 
 function parseId(rawId) {
-    const id = Number.parseInt(rawId, 10);
-    return Number.isInteger(id) && id > 0 ? id : null;
+    const text = String(rawId);
+    if (!/^[0-9]+$/.test(text)) return null;
+
+    const id = Number(text);
+    return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 function normalizeSeedOption(option) {
@@ -703,9 +706,8 @@ function validateListPayload(payload, { partial = false } = {}) {
     const hasName = Object.prototype.hasOwnProperty.call(payload, 'name');
     const hasOrder = Object.prototype.hasOwnProperty.call(payload, 'sortOrder');
 
-    if (!hasName && !hasOrder) {
-        return { ok: false, error: partial ? '至少提供 name 或 sortOrder' : 'name 是必填项' };
-    }
+    if (!partial && !hasName) return { ok: false, error: 'name 是必填项' };
+    if (partial && !hasName && !hasOrder) return { ok: false, error: '至少提供 name 或 sortOrder' };
 
     const data = {};
 
@@ -833,6 +835,16 @@ app.post('/api/lists/:id/membership', requireAdmin, async (req, res, next) => {
             return res.status(400).json({ error: 'optionIds 含非法 ID' });
         }
 
+        if (optionIds.length > 0) {
+            const existingOptions = await pool.query(
+                'SELECT COUNT(*)::int AS count FROM food_options WHERE id = ANY($1::bigint[])',
+                [optionIds]
+            );
+            if (existingOptions.rows[0].count !== optionIds.length) {
+                return res.status(404).json({ error: '选项不存在' });
+            }
+        }
+
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
@@ -857,6 +869,9 @@ app.post('/api/lists/:id/membership', requireAdmin, async (req, res, next) => {
         const result = await pool.query('SELECT COUNT(*)::int AS count FROM list_items WHERE list_id = $1', [listId]);
         return res.json({ listId, mode, count: result.rows[0].count });
     } catch (error) {
+        if (error && error.code === '23503') {
+            return res.status(404).json({ error: '选项不存在' });
+        }
         return next(error);
     }
 });
@@ -896,6 +911,16 @@ app.post('/api/options', requireAdmin, async (req, res, next) => {
 
         if (rawListIds && listIds.length !== rawListIds.length) {
             return res.status(400).json({ error: 'listIds 含非法榜单 ID' });
+        }
+
+        if (listIds && listIds.length > 0) {
+            const existingLists = await pool.query(
+                'SELECT COUNT(*)::int AS count FROM lists WHERE id = ANY($1::bigint[])',
+                [listIds]
+            );
+            if (existingLists.rows[0].count !== listIds.length) {
+                return res.status(404).json({ error: '榜单不存在' });
+            }
         }
 
         const client = await pool.connect();
@@ -946,6 +971,9 @@ app.post('/api/options', requireAdmin, async (req, res, next) => {
     } catch (error) {
         if (error && error.code === '23505') {
             return res.status(409).json({ error: '已有同名店铺（改名或直接用现有的）' });
+        }
+        if (error && error.code === '23503') {
+            return res.status(404).json({ error: '榜单不存在' });
         }
         return next(error);
     }
@@ -1052,13 +1080,24 @@ app.delete('/api/options/:id', requireAdmin, async (req, res, next) => {
 app.post('/api/options/import', requireAdmin, async (req, res, next) => {
     try {
         const body = req.body || {};
-        const mode = body.mode === 'append' ? 'append' : 'replace';
+        if (!['append', 'replace'].includes(body.mode)) {
+            return res.status(400).json({ error: "mode 必须是 'append' 或 'replace'" });
+        }
+
+        const mode = body.mode;
         const rawItems = Array.isArray(body.items) ? body.items : [];
         const rawListId = body.listId === undefined ? null : body.listId;
         const listId = rawListId === null ? null : parseId(rawListId);
 
         if (rawListId !== null && !listId) {
             return res.status(400).json({ error: '无效的榜单 ID' });
+        }
+
+        if (listId) {
+            const exists = await pool.query('SELECT id FROM lists WHERE id = $1', [listId]);
+            if (exists.rowCount === 0) {
+                return res.status(404).json({ error: '榜单不存在' });
+            }
         }
 
         const items = dedupeByName(rawItems.map(normalizeImportItem).filter(Boolean));
@@ -1096,11 +1135,6 @@ app.post('/api/options/import', requireAdmin, async (req, res, next) => {
                     targetListId = created_list.rows[0].id;
                 } else {
                     targetListId = fallback.rows[0].id;
-                }
-            } else {
-                const exists = await client.query('SELECT id FROM lists WHERE id = $1', [listId]);
-                if (exists.rowCount === 0) {
-                    return res.status(404).json({ error: '榜单不存在' });
                 }
             }
 
@@ -1149,6 +1183,9 @@ app.post('/api/options/import', requireAdmin, async (req, res, next) => {
             options: result.rows
         });
     } catch (error) {
+        if (error && error.code === '23503') {
+            return res.status(404).json({ error: '榜单不存在' });
+        }
         return next(error);
     }
 });

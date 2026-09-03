@@ -17,9 +17,6 @@ const path = require('path');
 const { Pool } = require('pg');
 
 const ROOT = path.join(__dirname, '..');
-const OUT_FILE = process.env.SEED_FILE
-    ? path.resolve(ROOT, process.env.SEED_FILE)
-    : path.join(ROOT, 'data', 'options.json');
 
 function loadEnvFile() {
     const envPath = path.join(ROOT, '.env');
@@ -43,6 +40,10 @@ function loadEnvFile() {
 }
 
 loadEnvFile();
+
+const OUT_FILE = process.env.SEED_FILE
+    ? path.resolve(ROOT, process.env.SEED_FILE)
+    : path.join(ROOT, 'data', 'options.json');
 
 const DATABASE_URL = process.env.DATABASE_URL;
 

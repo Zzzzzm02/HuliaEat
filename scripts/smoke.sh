@@ -224,6 +224,8 @@ NO_EMOJI_RESULT=$(body -X POST "${BASE}/api/options/import" -H 'Content-Type: ap
 expect_code "导入缺 emoji 时按前后端共用规则自动匹配（面→🍜）" "🍜" "$NO_EMOJI_RESULT"
 expect_code "import replace 带密钥 → 200" 200 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"replace","items":[{"name":"替换后只剩这家","emoji":"🦆"}]}')"
 expect_code "replace 后总数为 1" 1 "$(count_of "${BASE}/api/options")"
+expect_code "非法 import mode → 400" 400 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"typo","items":[{"name":"不应导入","emoji":"🍜"}]}')"
+expect_code "非法 import mode 不会清空现有数据" 1 "$(count_of "${BASE}/api/options")"
 expect_code "空 items → 400" 400 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"append","items":[]}')"
 BAD_JSON='{"name":'
 expect_code "坏 JSON → 400（不再被误报为 500）" 400 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$BAD_JSON")"
@@ -238,9 +240,14 @@ LIST_A=$(body -X POST "${BASE}/api/lists" -H 'Content-Type: application/json' -H
 LIST_B=$(body -X POST "${BASE}/api/lists" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"榜B"}' | pick_id)
 expect_code "新建两个榜单拿到 id" "ok" "$([ -n "$LIST_A" ] && [ -n "$LIST_B" ] && echo ok || echo empty)"
 expect_code "同名榜单冲突 → 409" 409 "$(code -X POST "${BASE}/api/lists" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"榜A"}')"
+expect_code "新建榜单缺少 name → 400" 400 "$(code -X POST "${BASE}/api/lists" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"sortOrder":1}')"
 expect_code "GET /api/lists → 200" 200 "$(code "${BASE}/api/lists")"
 
 OPT_ID=$(body "${BASE}/api/options" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].id))')
+expect_code "ID 带后缀 → 400" 400 "$(code "${BASE}/api/options/${OPT_ID}abc")"
+BEFORE_BAD_LIST=$(count_of "${BASE}/api/options")
+expect_code "新增到不存在榜单 → 404" 404 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"不存在榜单的店","emoji":"🍜","listIds":[999999]}')"
+expect_code "不存在榜单不会新增孤儿店" "$BEFORE_BAD_LIST" "$(count_of "${BASE}/api/options")"
 
 # 说明：payload 一律先赋值给变量再传入。
 # macOS 的 bash 3.2 在「双引号参数里嵌套 $( )，再用 \" 转义」时会拼错引号，
@@ -257,6 +264,8 @@ expect_code "非法 list 参数 → 400" 400 "$(code "${BASE}/api/options?list=n
 
 MEMBER_EXPLODE=$(code -X POST "${BASE}/api/lists/${LIST_A}/membership" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$PAYLOAD_EXPLODE")
 expect_code "非法 membership mode → 400" 400 "$MEMBER_EXPLODE"
+MEMBER_MISSING=$(code -X POST "${BASE}/api/lists/${LIST_A}/membership" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"add","optionIds":[999999]}')
+expect_code "加入不存在店铺 → 404" 404 "$MEMBER_MISSING"
 
 MULTI_BODY='{"name":"双榜店","emoji":"🍜","listIds":['$LIST_A','${LIST_B}']}'
 MULTI_ID=$(body -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$MULTI_BODY" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log((j.lists||[]).length)})')
