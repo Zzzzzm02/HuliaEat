@@ -287,7 +287,7 @@ schema_migrations(name, applied_at)     ← 已执行的迁移
 
 ## 更新记录
 
-- **2026-09-05（地图页）** — 第四屏「地图」：高德 JSAPI 动态加载 + emoji 标注 + 榜单筛选；`004` 迁移给 `food_options` 加 `latitude` / `longitude` / `address`（可空）；所有写接口对坐标做严格校验（成对、范围、null 清除，非法整单 400）；`GET /api/config` 公开下发地图 key；`npm run geocode` 用「Web 服务」key 批量查坐标（提示词在 `scripts/geocode-hints.json`）；快照与种子支持坐标回灌；冒烟扩到 109 项
+- **2026-09-05 · `93b940e`** — 第四屏「地图」：高德 JSAPI 动态加载 + emoji 标注 + 榜单筛选；`004` 迁移给 `food_options` 加 `latitude` / `longitude` / `address`（可空）；所有写接口对坐标做严格校验（成对、范围、null 清除，非法整单 400）；`GET /api/config` 公开下发地图 key；`npm run geocode` 用「Web 服务」key 批量查坐标（提示词在 `scripts/geocode-hints.json`）；快照与种子支持坐标回灌；冒烟扩到 109 项
 - **2026-09-05 · `3de9b91`** — 依赖安全:在 `package.json` 加 `overrides` 把 `qs` 锁到 `^6.16.0`,修掉经由 express/body-parser 传递进来的 3 个 qs DoS 公告(修复版超出上游声明的 `~` 范围,`npm audit fix` 自动够不着);express 随之升至 4.22.1,90 项冒烟全过
 - **2026-09-03 · `a7181ca`** — 导入与校验加固:批量导入的 `mode` 必须显式传值,非法值直接 400(不再默认当 `replace`);新建店铺挂榜 / membership 关联增加存在性预检,引用不存在的榜单或店铺返回 404 而非数据库外键错误;ID 解析改为严格整数校验;冒烟断言扩到 90 项;`.env.example` 补齐 compose 所需的 `POSTGRES_*` 三项
 - **2026-09-03 · `51c777c`** — 店名唯一约束（`003` 迁移合并既有重名行 + 单条/编辑重名一律 409）；`emoji-rules.js` 让关键词→Emoji 表前后端共用一份，纯 API 导入也能自动配图；PWA（manifest + Service Worker + 三张图标）；`.dockerignore` 补漏（备份目录不再进镜像）
