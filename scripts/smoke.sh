@@ -281,6 +281,40 @@ MEMBER_RESET=$(code -X POST "${BASE}/api/lists/${LIST_A}/membership" -H 'Content
 expect_code "membership replace 可整榜重置" 200 "$MEMBER_RESET"
 expect_code "重置后榜A为空" 0 "$(count_of "${BASE}/api/options?list=${LIST_A}")"
 
+# ---------------------------------------------------------------- 地理信息
+section "地理信息：可选但填了就必须合法"
+geo_field() { # body json-key → 值（undefined/null 原样标注）
+    printf '%s' "$1" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);const v=j[process.argv[1]];console.log(v===undefined?"missing":v===null?"null":String(v))}catch(e){console.log("parse-error")}})' "$2"
+}
+
+GEO_BODY='{"name":"坐标火锅","emoji":"🍲","latitude":30.274085,"longitude":120.15507,"address":"武林广场"}'
+GEO_ID=$(body -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$GEO_BODY" | pick_id)
+expect_code "POST 带合法经纬度+地址 → 拿到 id" "ok" "$([ -n "$GEO_ID" ] && echo ok || echo empty)"
+GEO_READ=$(body "${BASE}/api/options/${GEO_ID}")
+expect_code "GET 单条读回经度" "120.15507" "$(geo_field "$GEO_READ" longitude)"
+expect_code "GET 单条读回地址" "武林广场" "$(geo_field "$GEO_READ" address)"
+
+PUT_KEEP_BODY='{"name":"坐标火锅改","emoji":"🍲"}'
+expect_code "PUT 不带坐标 → 200" 200 "$(code -X PUT "${BASE}/api/options/${GEO_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$PUT_KEEP_BODY")"
+expect_code "PUT 后坐标保留（附加元数据不随全量更新清空）" "30.274085" "$(geo_field "$(body "${BASE}/api/options/${GEO_ID}")" latitude)"
+
+expect_code "POST 只给纬度不成对 → 400" 400 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"半对","emoji":"🍜","latitude":30.1}')"
+expect_code "POST 纬度越界(91) → 400" 400 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"越界","emoji":"🍜","latitude":91,"longitude":120}')"
+expect_code "POST 非数字坐标 → 400" 400 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"坏类型","emoji":"🍜","latitude":"abc","longitude":120}')"
+expect_code "POST 空字符串坐标 → 400" 400 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"空串","emoji":"🍜","latitude":"","longitude":120}')"
+
+expect_code "PATCH 只改经度（另一半保留）→ 200" 200 "$(code -X PATCH "${BASE}/api/options/${GEO_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"longitude":120.2}')"
+expect_code "PATCH 只清经度造成半对 → 400" 400 "$(code -X PATCH "${BASE}/api/options/${GEO_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"longitude":null}')"
+expect_code "PATCH 成对清空 → 200" 200 "$(code -X PATCH "${BASE}/api/options/${GEO_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"latitude":null,"longitude":null}')"
+expect_code "清空后纬度为 null" "null" "$(geo_field "$(body "${BASE}/api/options/${GEO_ID}")" latitude)"
+expect_code "PATCH 单独清地址 → 200" 200 "$(code -X PATCH "${BASE}/api/options/${GEO_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"address":null}')"
+
+GEO_IMPORT='{"mode":"append","items":[{"name":"导入带坐标","emoji":"🍜","latitude":30.1,"longitude":120.1,"address":"某路1号"},{"name":"导入无坐标","emoji":"🍚"}]}'
+expect_code "import 带坐标 → 200" 200 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$GEO_IMPORT")"
+IMPORT_COORD=$(body "${BASE}/api/options" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const o=JSON.parse(s).find((x)=>x.name==="导入带坐标");console.log(o&&o.longitude!=null?String(o.longitude):"missing")})')
+expect_code "import 的坐标入了库" "120.1" "$IMPORT_COORD"
+expect_code "import 非法坐标 → 400（整单拒绝）" 400 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"append","items":[{"name":"坏坐标","emoji":"🍜","latitude":99,"longitude":120}]}')"
+
 # ---------------------------------------------------------------- 静态资源
 section "静态资源只放行前端真正需要的文件"
 expect_code "GET / → 200" 200 "$(code "${BASE}/")"
@@ -289,6 +323,8 @@ expect_code "GET /styles.css → 200" 200 "$(code "${BASE}/styles.css")"
 expect_code "GET /script.js → 200" 200 "$(code "${BASE}/script.js")"
 expect_code "GET /image1/eateat.jpg → 200" 200 "$(code "${BASE}/image1/eateat.jpg")"
 expect_code "GET /emoji-rules.js → 200" 200 "$(code "${BASE}/emoji-rules.js")"
+expect_code "GET /map.js → 200" 200 "$(code "${BASE}/map.js")"
+expect_code "GET /api/config → 200（地图公开配置）" 200 "$(code "${BASE}/api/config")"
 expect_code "GET /manifest.webmanifest → 200" 200 "$(code "${BASE}/manifest.webmanifest")"
 expect_code "manifest 的 Content-Type 正确" "application/manifest+json; charset=utf-8" "$(ctype "${BASE}/manifest.webmanifest")"
 expect_code "GET /sw.js → 200" 200 "$(code "${BASE}/sw.js")"

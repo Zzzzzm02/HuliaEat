@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "smoke": "bash scripts/smoke.sh",
-    "export": "node scripts/export-snapshot.js"
+    "export": "node scripts/export-snapshot.js",
+    "geocode": "node scripts/geocode-options.js"
   },
   "keywords": [
     "food",

@@ -9,12 +9,13 @@
  *
  * 发版时把 CACHE 版本号 +1，旧缓存整体作废。
  */
-const CACHE = 'huliaeat-v1';
+const CACHE = 'huliaeat-v2';
 
 const PRECACHE = [
     '/',
     '/styles.css',
     '/script.js',
+    '/map.js',
     '/emoji-rules.js',
     '/manifest.webmanifest',
     '/icons/icon-192.png',

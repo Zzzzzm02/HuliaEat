@@ -258,6 +258,9 @@ async function loadOptions({ silent = false } = {}) {
         const options = await requestJson(`${API_BASE}/options`);
         foodOptions = options;
         updateStats();
+        renderListChips(); // /lists 常比 /options 先返回，chips 上的「全部」计数需要这里补一次
+        // 数据晚于地图首绘到达时补一次重绘（地图未初始化时内部静默跳过）
+        if (window.HuliaMap) window.HuliaMap.refresh();
 
         if (document.getElementById('manage-screen').classList.contains('active')) {
             renderOptionsList();
@@ -373,7 +376,9 @@ function renderExclusionNote() {
 }
 
 function renderListChips() {
-    const containers = ['list-chips', 'manage-list-chips'].map((id) => document.getElementById(id)).filter(Boolean);
+    const containers = ['list-chips', 'manage-list-chips', 'map-list-chips']
+        .map((id) => document.getElementById(id))
+        .filter(Boolean);
     if (!containers.length) return;
 
     const total = foodOptions.length;
@@ -417,6 +422,8 @@ function selectList(listId) {
     renderListChips();
     renderOptionsList();
     renderListsAdmin();
+    // 地图屏跟着同一个筛选走；还没初始化时内部会静默跳过
+    if (window.HuliaMap) window.HuliaMap.refresh();
 }
 
 function renderListsAdmin() {
@@ -820,6 +827,11 @@ function switchScreen(screenId) {
         document.getElementById('home-btn').classList.add('active');
     }
 
+    if (screenId === 'map-screen') {
+        document.getElementById('map-btn').classList.add('active');
+        if (window.HuliaMap) window.HuliaMap.render();
+    }
+
     if (screenId === 'manage-screen') {
         document.getElementById('manage-btn').classList.add('active');
         loadOptions({ silent: true });
@@ -840,9 +852,52 @@ function validateOptionInput(name, emoji) {
     return null;
 }
 
+const MAX_ADDRESS_LENGTH = 200;
+
+// 从输入框收集可选地理信息；返回 { fields } 或 { error }。
+// 经纬度成对收，空串视为「没填」；清空一个留另一个直接报错
+function collectGeoFields(addressInput, latInput, lngInput) {
+    const fields = {};
+
+    if (addressInput) {
+        const address = addressInput.value.trim();
+        if (address.length > MAX_ADDRESS_LENGTH) return { error: `地址不能超过 ${MAX_ADDRESS_LENGTH} 个字符` };
+        fields.address = address || null;
+    }
+
+    if (latInput && lngInput) {
+        const latText = latInput.value.trim();
+        const lngText = lngInput.value.trim();
+
+        if (!latText !== !lngText) {
+            return { error: '纬度和经度要成对填写（都清空即删除位置）' };
+        }
+
+        if (latText) {
+            const latitude = Number(latText);
+            const longitude = Number(lngText);
+            const valid = Number.isFinite(latitude) && latitude >= -90 && latitude <= 90
+                && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
+            if (!valid) {
+                return { error: '经纬度必须是合法数字（纬度 -90~90，经度 -180~180）' };
+            }
+            fields.latitude = latitude;
+            fields.longitude = longitude;
+        } else {
+            fields.latitude = null;
+            fields.longitude = null;
+        }
+    }
+
+    return { fields };
+}
+
 async function addFoodOption() {
     const nameInput = document.getElementById('food-name');
     const emojiInput = document.getElementById('food-emoji');
+    const addressInput = document.getElementById('food-address');
+    const latInput = document.getElementById('food-lat');
+    const lngInput = document.getElementById('food-lng');
     const addBtn = document.getElementById('add-btn');
 
     const name = nameInput.value.trim();
@@ -854,9 +909,16 @@ async function addFoodOption() {
         return;
     }
 
+    const geo = collectGeoFields(addressInput, latInput, lngInput);
+    if (geo.error) {
+        showManageMessage(geo.error, 'error');
+        return;
+    }
+
     addBtn.disabled = true;
 
     try {
+        const payload = { name, emoji, ...geo.fields };
         const newOption = await requestJson(`${API_BASE}/options`, {
             method: 'POST',
             admin: true,
@@ -865,8 +927,8 @@ async function addFoodOption() {
             },
             body: JSON.stringify(
                 selectedListId === ALL_LISTS_ID
-                    ? { name, emoji }
-                    : { name, emoji, listIds: [Number(selectedListId)] }
+                    ? payload
+                    : { ...payload, listIds: [Number(selectedListId)] }
             )
         });
 
@@ -876,6 +938,9 @@ async function addFoodOption() {
 
         nameInput.value = '';
         emojiInput.value = '';
+        if (addressInput) addressInput.value = '';
+        if (latInput) latInput.value = '';
+        if (lngInput) lngInput.value = '';
 
         showManageMessage('选项添加成功', 'success');
     } catch (error) {
@@ -925,6 +990,9 @@ function cancelEditingOption() {
 async function saveEditingOption(id) {
     const nameInput = document.getElementById(`edit-name-${id}`);
     const emojiInput = document.getElementById(`edit-emoji-${id}`);
+    const addressInput = document.getElementById(`edit-address-${id}`);
+    const latInput = document.getElementById(`edit-lat-${id}`);
+    const lngInput = document.getElementById(`edit-lng-${id}`);
 
     if (!nameInput || !emojiInput) return;
 
@@ -937,6 +1005,12 @@ async function saveEditingOption(id) {
         return;
     }
 
+    const geo = collectGeoFields(addressInput, latInput, lngInput);
+    if (geo.error) {
+        showManageMessage(geo.error, 'error');
+        return;
+    }
+
     try {
         const updatedOption = await requestJson(`${API_BASE}/options/${id}`, {
             method: 'PATCH',
@@ -944,7 +1018,7 @@ async function saveEditingOption(id) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ name, emoji })
+            body: JSON.stringify({ name, emoji, ...geo.fields })
         });
 
         foodOptions = foodOptions.map((option) => (option.id === id ? updatedOption : option));
@@ -996,6 +1070,15 @@ function createOptionView(option) {
         tags.appendChild(tag);
     });
 
+    // 已定位的店给一个 📍 标，方便知道哪些会上地图
+    if (option.latitude != null && option.longitude != null) {
+        const geoTag = document.createElement('span');
+        geoTag.className = 'option-tag option-tag-geo';
+        geoTag.title = option.address || `${option.latitude}, ${option.longitude}`;
+        geoTag.textContent = '📍';
+        tags.appendChild(geoTag);
+    }
+
     if (getExcludedIds().includes(String(option.id))) {
         const hiddenTag = document.createElement('span');
         hiddenTag.className = 'option-tag option-tag-hidden';
@@ -1046,17 +1129,56 @@ function createOptionEditView(option) {
     nameInput.value = option.name;
     nameInput.placeholder = '餐饮名称';
 
+    // 地理信息：预填现值，改了就更新，清空保存即清除
+    const geoRow = document.createElement('div');
+    geoRow.className = 'option-geo-row';
+
+    const addressInput = document.createElement('input');
+    addressInput.className = 'option-input option-address-input';
+    addressInput.id = `edit-address-${option.id}`;
+    addressInput.type = 'text';
+    addressInput.maxLength = MAX_ADDRESS_LENGTH;
+    addressInput.value = option.address || '';
+    addressInput.placeholder = '地址（清空即删除）';
+
+    const latInput = document.createElement('input');
+    latInput.className = 'option-input option-coord-input';
+    latInput.id = `edit-lat-${option.id}`;
+    latInput.type = 'text';
+    latInput.inputMode = 'decimal';
+    latInput.value = option.latitude == null ? '' : String(option.latitude);
+    latInput.placeholder = '纬度';
+
+    const lngInput = document.createElement('input');
+    lngInput.className = 'option-input option-coord-input';
+    lngInput.id = `edit-lng-${option.id}`;
+    lngInput.type = 'text';
+    lngInput.inputMode = 'decimal';
+    lngInput.value = option.longitude == null ? '' : String(option.longitude);
+    lngInput.placeholder = '经度';
+
+    geoRow.appendChild(addressInput);
+    geoRow.appendChild(latInput);
+    geoRow.appendChild(lngInput);
+
     const actions = document.createElement('div');
     actions.className = 'option-actions';
 
+    const clearGeoBtn = createButton('清空位置', 'option-btn quiet', () => {
+        addressInput.value = '';
+        latInput.value = '';
+        lngInput.value = '';
+    }, '一键清空地址与经纬度（保存后生效）');
     const saveBtn = createButton('保存', 'option-btn save', () => saveEditingOption(option.id));
     const cancelBtn = createButton('取消', 'option-btn cancel', cancelEditingOption);
 
+    actions.appendChild(clearGeoBtn);
     actions.appendChild(saveBtn);
     actions.appendChild(cancelBtn);
 
     editForm.appendChild(emojiInput);
     editForm.appendChild(nameInput);
+    editForm.appendChild(geoRow);
 
     optionItem.appendChild(editForm);
     optionItem.appendChild(actions);
@@ -1153,6 +1275,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const retryBtn = document.getElementById('retry-btn');
     const backHomeBtn = document.getElementById('back-home-btn');
     const homeBtn = document.getElementById('home-btn');
+    const mapBtn = document.getElementById('map-btn');
     const manageBtn = document.getElementById('manage-btn');
     const addBtn = document.getElementById('add-btn');
 
@@ -1160,6 +1283,7 @@ document.addEventListener('DOMContentLoaded', () => {
     retryBtn.addEventListener('click', resetApp);
     backHomeBtn.addEventListener('click', () => switchScreen('start-screen'));
     homeBtn.addEventListener('click', () => switchScreen('start-screen'));
+    if (mapBtn) mapBtn.addEventListener('click', () => switchScreen('map-screen'));
     manageBtn.addEventListener('click', () => switchScreen('manage-screen'));
     addBtn.addEventListener('click', addFoodOption);
 

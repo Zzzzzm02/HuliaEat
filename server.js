@@ -41,11 +41,17 @@ const SEED_FILE = process.env.SEED_FILE || path.join(__dirname, 'data', 'options
 
 const MAX_NAME_LENGTH = 40;
 const MAX_EMOJI_LENGTH = 8;
+const MAX_ADDRESS_LENGTH = 200;
 
 /* ---------------- 安全相关配置 ---------------- */
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const ADMIN_TOKEN = (process.env.ADMIN_TOKEN || '').trim();
+
+// 高德地图：JSAPI key 随 GET /api/config 下发（它本来就是设计给浏览器用的公开值，
+// 建议在高德控制台给 key 配域名白名单）；AMAP_WEB_KEY 只给 scripts/geocode-options.js 用
+const AMAP_JSAPI_KEY = (process.env.AMAP_JSAPI_KEY || '').trim();
+const AMAP_SECURITY_CODE = (process.env.AMAP_SECURITY_CODE || '').trim();
 
 // 跨域写操作白名单：逗号分隔的 Origin，例如 "https://admin.example.com,https://fox.example.com"
 const CORS_ALLOWED_ORIGINS = new Set(
@@ -96,6 +102,7 @@ const SERVED_FILES = new Map([
     ['/styles.css', { file: 'styles.css', type: 'text/css; charset=utf-8' }],
     ['/script.js', { file: 'script.js', type: 'application/javascript; charset=utf-8' }],
     ['/emoji-rules.js', { file: 'emoji-rules.js', type: 'application/javascript; charset=utf-8' }],
+    ['/map.js', { file: 'map.js', type: 'application/javascript; charset=utf-8' }],
     // PWA：sw.js 必须 no-cache，否则更新会卡在浏览器缓存上
     ['/manifest.webmanifest', { file: 'manifest.webmanifest', type: 'application/manifest+json; charset=utf-8' }],
     ['/sw.js', { file: 'sw.js', type: 'application/javascript; charset=utf-8', cache: 'no-cache' }],
@@ -324,7 +331,30 @@ function normalizeSeedOption(option) {
     if (name.length > MAX_NAME_LENGTH) return null;
     if (emoji.length > MAX_EMOJI_LENGTH) return null;
 
-    return { name, emoji };
+    const result = { name, emoji };
+
+    // 地理信息可选：种子是受信文件，坐标坏了就丢坐标保店铺，不让一家店挡住整份种子
+    const latitude = parseCoordinateValue(option.latitude, -90, 90);
+    const longitude = parseCoordinateValue(option.longitude, -180, 180);
+    if (latitude !== null && longitude !== null) {
+        result.latitude = latitude;
+        result.longitude = longitude;
+    }
+
+    const address = normalizeText(option.address);
+    if (address && address.length <= MAX_ADDRESS_LENGTH) {
+        result.address = address;
+    }
+
+    return result;
+}
+
+// 宽松解析（种子/快照用）：不是合法数字或越界就返回 null，静默丢弃
+function parseCoordinateValue(value, min, max) {
+    if (typeof value === 'string' && value.trim() !== '') value = Number(value);
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    if (value < min || value > max) return null;
+    return value;
 }
 
 function dedupeByName(options) {
@@ -348,13 +378,16 @@ function validatePayload(payload, { partial = false } = {}) {
 
     const hasName = Object.prototype.hasOwnProperty.call(payload, 'name');
     const hasEmoji = Object.prototype.hasOwnProperty.call(payload, 'emoji');
+    const hasLatitude = Object.prototype.hasOwnProperty.call(payload, 'latitude');
+    const hasLongitude = Object.prototype.hasOwnProperty.call(payload, 'longitude');
+    const hasAddress = Object.prototype.hasOwnProperty.call(payload, 'address');
 
     if (!partial && (!hasName || !hasEmoji)) {
         return { ok: false, error: 'name 和 emoji 都是必填项' };
     }
 
-    if (partial && !hasName && !hasEmoji) {
-        return { ok: false, error: '至少提供一个可修改字段（name 或 emoji）' };
+    if (partial && !hasName && !hasEmoji && !hasLatitude && !hasLongitude && !hasAddress) {
+        return { ok: false, error: '至少提供一个可修改字段（name / emoji / latitude / longitude / address）' };
     }
 
     const result = {};
@@ -377,7 +410,46 @@ function validatePayload(payload, { partial = false } = {}) {
         result.emoji = emoji;
     }
 
+    // 地理字段严格校验：一旦出现在请求里就必须合法（null = 清除），否则整个请求 400
+    if (hasLatitude) {
+        const parsed = parseCoordinateInput(payload.latitude, { min: -90, max: 90, label: 'latitude' });
+        if (parsed.error) return { ok: false, error: parsed.error };
+        result.latitude = parsed.clear ? null : parsed.value;
+    }
+
+    if (hasLongitude) {
+        const parsed = parseCoordinateInput(payload.longitude, { min: -180, max: 180, label: 'longitude' });
+        if (parsed.error) return { ok: false, error: parsed.error };
+        result.longitude = parsed.clear ? null : parsed.value;
+    }
+
+    if (hasAddress) {
+        const address = normalizeText(payload.address);
+        if (address.length > MAX_ADDRESS_LENGTH) {
+            return { ok: false, error: `address 最长不能超过 ${MAX_ADDRESS_LENGTH} 个字符` };
+        }
+        result.address = address || null;
+    }
+
+    // POST/PUT 没有现值可配对：经纬度必须成对出现
+    if (!partial && hasLatitude !== hasLongitude) {
+        return { ok: false, error: 'latitude 和 longitude 必须成对提供' };
+    }
+
     return { ok: true, data: result };
+}
+
+// 严格解析（接口请求用）：null 表示清除，其余必须是可以入库的数字，带错误信息返回
+function parseCoordinateInput(raw, { min, max, label }) {
+    if (raw === null) return { clear: true };
+    if (typeof raw === 'boolean') return { error: `${label} 必须是数字` };
+    if (typeof raw === 'string') {
+        if (!raw.trim()) return { error: `${label} 不能是空字符串（要清除请传 null）` };
+        raw = Number(raw);
+    }
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) return { error: `${label} 必须是数字` };
+    if (raw < min || raw > max) return { error: `${label} 超出有效范围（${min} ~ ${max}）` };
+    return { value: raw };
 }
 
 // 与前端 script.js 的 guessEmoji 同一套规则（表来自 emoji-rules.js）
@@ -397,7 +469,34 @@ function normalizeImportItem(item) {
     let emoji = normalizeText(item.emoji);
     if (!emoji || emoji.length > MAX_EMOJI_LENGTH) emoji = guessEmoji(name);
 
-    return { name, emoji };
+    const result = { name, emoji };
+    const hasOwn = Object.prototype.hasOwnProperty;
+
+    // 可选地理信息：填了就必须合法，带 error 返回由调用方 400（比静默丢弃更早暴露问题）
+    const hasLatitude = hasOwn.call(item, 'latitude');
+    const hasLongitude = hasOwn.call(item, 'longitude');
+    if (hasLatitude !== hasLongitude) {
+        return { error: `「${name}」的 latitude 和 longitude 必须成对提供` };
+    }
+
+    if (hasLatitude) {
+        const lat = parseCoordinateInput(item.latitude, { min: -90, max: 90, label: 'latitude' });
+        if (lat.error) return { error: `「${name}」的 ${lat.error}` };
+        const lng = parseCoordinateInput(item.longitude, { min: -180, max: 180, label: 'longitude' });
+        if (lng.error) return { error: `「${name}」的 ${lng.error}` };
+        result.latitude = lat.clear ? null : lat.value;
+        result.longitude = lng.clear ? null : lng.value;
+    }
+
+    if (hasOwn.call(item, 'address')) {
+        const address = normalizeText(item.address);
+        if (address.length > MAX_ADDRESS_LENGTH) {
+            return { error: `「${name}」的 address 超过 ${MAX_ADDRESS_LENGTH} 个字符` };
+        }
+        result.address = address || null;
+    }
+
+    return result;
 }
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
@@ -557,8 +656,9 @@ async function seedIfEmpty() {
         // 再插店，并按声明挂进榜单（未声明的进默认榜单）
         for (const option of seed.options) {
             const inserted = await client.query(
-                'INSERT INTO food_options(name, emoji) VALUES ($1, $2) RETURNING id',
-                [option.name, option.emoji]
+                `INSERT INTO food_options(name, emoji, latitude, longitude, address)
+                 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+                [option.name, option.emoji, option.latitude ?? null, option.longitude ?? null, option.address ?? null]
             );
             const optionId = inserted.rows[0].id;
 
@@ -637,8 +737,17 @@ app.get('/api/health', async (req, res) => {
     }
 });
 
+// 前端地图页初始化要用的公开配置。未配置 JSAPI key 时返回 null，地图页据此显示配置指引
+app.get('/api/config', (req, res) => {
+    res.json({
+        amap: AMAP_JSAPI_KEY
+            ? { key: AMAP_JSAPI_KEY, securityCode: AMAP_SECURITY_CODE || null }
+            : null
+    });
+});
+
 const OPTIONS_SELECT = `
-    SELECT o.id, o.name, o.emoji,
+    SELECT o.id, o.name, o.emoji, o.latitude, o.longitude, o.address,
            COALESCE(
                json_agg(json_build_object('id', l.id, 'name', l.name)
                         ORDER BY l.sort_order, l.id)
@@ -928,8 +1037,16 @@ app.post('/api/options', requireAdmin, async (req, res, next) => {
             await client.query('BEGIN');
 
             const inserted = await client.query(
-                'INSERT INTO food_options(name, emoji) VALUES ($1, $2) RETURNING id, name, emoji',
-                [validation.data.name, validation.data.emoji]
+                `INSERT INTO food_options(name, emoji, latitude, longitude, address)
+                 VALUES ($1, $2, $3, $4, $5)
+                 RETURNING id, name, emoji, latitude, longitude, address`,
+                [
+                    validation.data.name,
+                    validation.data.emoji,
+                    validation.data.latitude ?? null,
+                    validation.data.longitude ?? null,
+                    validation.data.address ?? null
+                ]
             );
             const option = inserted.rows[0];
 
@@ -991,14 +1108,35 @@ app.put('/api/options/:id', requireAdmin, async (req, res, next) => {
             return res.status(400).json({ error: validation.error });
         }
 
+        // 坐标是附加元数据：PUT 没带的字段保留现值，带了（含 null）才更新
+        const data = validation.data;
+        const hasOwn = Object.prototype.hasOwnProperty;
+        const assignments = ['name = $1', 'emoji = $2', 'updated_at = NOW()'];
+        const params = [data.name, data.emoji];
+
+        if (hasOwn.call(data, 'address')) {
+            params.push(data.address);
+            assignments.push(`address = $${params.length}`);
+        }
+        if (hasOwn.call(data, 'latitude')) {
+            params.push(data.latitude);
+            assignments.push(`latitude = $${params.length}`);
+        }
+        if (hasOwn.call(data, 'longitude')) {
+            params.push(data.longitude);
+            assignments.push(`longitude = $${params.length}`);
+        }
+        params.push(id);
+        const idIndex = params.length;
+
         const result = await pool.query(
             `
                 UPDATE food_options
-                SET name = $1, emoji = $2, updated_at = NOW()
-                WHERE id = $3
-                RETURNING id, name, emoji
+                SET ${assignments.join(', ')}
+                WHERE id = $${idIndex}
+                RETURNING id, name, emoji, latitude, longitude, address
             `,
-            [validation.data.name, validation.data.emoji, id]
+            params
         );
 
         if (result.rowCount === 0) {
@@ -1027,7 +1165,7 @@ app.patch('/api/options/:id', requireAdmin, async (req, res, next) => {
         }
 
         const currentResult = await pool.query(
-            'SELECT id, name, emoji FROM food_options WHERE id = $1',
+            'SELECT id, name, emoji, latitude, longitude, address FROM food_options WHERE id = $1',
             [id]
         );
 
@@ -1036,17 +1174,29 @@ app.patch('/api/options/:id', requireAdmin, async (req, res, next) => {
         }
 
         const current = currentResult.rows[0];
-        const nextName = validation.data.name ?? current.name;
-        const nextEmoji = validation.data.emoji ?? current.emoji;
+        const data = validation.data;
+        const hasOwn = Object.prototype.hasOwnProperty;
+
+        const nextName = data.name ?? current.name;
+        const nextEmoji = data.emoji ?? current.emoji;
+
+        // 地理字段三态：没提供 → 保留现值；null → 清除；有值 → 更新。
+        // 合并后经纬度必须成对存在，半对（有 lat 没 lng）一律 400
+        const nextLatitude = hasOwn.call(data, 'latitude') ? data.latitude : current.latitude;
+        const nextLongitude = hasOwn.call(data, 'longitude') ? data.longitude : current.longitude;
+        if ((nextLatitude === null) !== (nextLongitude === null)) {
+            return res.status(400).json({ error: 'latitude 和 longitude 必须成对提供或成对清除' });
+        }
+        const nextAddress = hasOwn.call(data, 'address') ? data.address : current.address;
 
         const updatedResult = await pool.query(
             `
                 UPDATE food_options
-                SET name = $1, emoji = $2, updated_at = NOW()
-                WHERE id = $3
-                RETURNING id, name, emoji
+                SET name = $1, emoji = $2, latitude = $3, longitude = $4, address = $5, updated_at = NOW()
+                WHERE id = $6
+                RETURNING id, name, emoji, latitude, longitude, address
             `,
-            [nextName, nextEmoji, id]
+            [nextName, nextEmoji, nextLatitude, nextLongitude, nextAddress, id]
         );
 
         return res.json(updatedResult.rows[0]);
@@ -1100,7 +1250,14 @@ app.post('/api/options/import', requireAdmin, async (req, res, next) => {
             }
         }
 
-        const items = dedupeByName(rawItems.map(normalizeImportItem).filter(Boolean));
+        // 逐项 normalize：带 error 的条目（非法坐标等）直接 400，避免一半入库一半丢失
+        const normalized = rawItems.map((item, index) => ({ item: normalizeImportItem(item), index }));
+        const firstError = normalized.find((entry) => entry.item && entry.item.error);
+        if (firstError) {
+            return res.status(400).json({ error: `第 ${firstError.index + 1} 项：${firstError.item.error}` });
+        }
+
+        const items = dedupeByName(normalized.map((entry) => entry.item).filter(Boolean));
 
         if (items.length === 0) {
             return res.status(400).json({ error: '没有可导入的有效选项' });
@@ -1151,8 +1308,9 @@ app.post('/api/options/import', requireAdmin, async (req, res, next) => {
                     optionId = found.rows[0].id;
                 } else {
                     const inserted = await client.query(
-                        'INSERT INTO food_options(name, emoji) VALUES ($1, $2) RETURNING id',
-                        [item.name, item.emoji]
+                        `INSERT INTO food_options(name, emoji, latitude, longitude, address)
+                         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+                        [item.name, item.emoji, item.latitude ?? null, item.longitude ?? null, item.address ?? null]
                     );
                     optionId = inserted.rows[0].id;
                     created += 1;

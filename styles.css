@@ -53,6 +53,12 @@
     box-sizing: border-box;
 }
 
+/* hidden 属性必须永远生效：占位层 / 排除提示等元素自带 display:flex，
+   作者样式会压过 UA 的 [hidden] 规则，不加这条它们会一直盖在页面上 */
+[hidden] {
+    display: none !important;
+}
+
 html {
     -webkit-text-size-adjust: 100%;
 }
@@ -276,11 +282,11 @@ body::after {
     background: var(--line);
 }
 
-/* ---------- 导航（分段控件） ---------- */
+/* ---------- 导航（分段控件，三屏：首页 / 地图 / 管理） ---------- */
 .nav {
     position: relative;
     display: flex;
-    width: 264px;
+    width: 300px;
     max-width: 100%;
     margin: 0 auto 2.2rem;
     padding: 4px;
@@ -296,15 +302,19 @@ body::after {
     top: 4px;
     left: 4px;
     bottom: 4px;
-    width: calc(50% - 4px);
+    width: calc((100% - 8px) / 3);
     border-radius: var(--r-pill);
     background: var(--paper);
     box-shadow: var(--sh-sm), 0 0 0 1px rgba(50, 37, 25, .03);
     transition: transform .38s var(--spring);
 }
 
-.nav:has(#manage-btn.active)::before {
+.nav:has(#map-btn.active)::before {
     transform: translateX(100%);
+}
+
+.nav:has(#manage-btn.active)::before {
+    transform: translateX(200%);
 }
 
 .nav-btn {
@@ -1156,7 +1166,15 @@ input:focus-visible {
     }
 
     .nav {
-        width: 240px;
+        width: 268px;
+    }
+
+    .nav-btn {
+        font-size: .88rem;
+    }
+
+    .geo-row {
+        grid-template-columns: 1fr;
     }
 
     .main-btn {
@@ -1413,6 +1431,161 @@ input:focus-visible {
     border: 1px solid var(--line);
     background: var(--paper);
     color: var(--ink);
+}
+
+/* ---------------- 地图屏 ---------------- */
+
+.map-header {
+    width: 100%;
+    margin-bottom: 1.1rem;
+}
+
+.map-container {
+    position: relative;
+    width: 100%;
+    height: clamp(360px, 58vh, 560px);
+    background: var(--cream-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    box-shadow: var(--sh-md);
+    overflow: hidden;
+}
+
+.map-placeholder {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    font-size: .92rem;
+    line-height: 2;
+    color: var(--ink-2);
+    background: repeating-linear-gradient(-45deg, var(--cream-2), var(--cream-2) 14px, #F7EFDF 14px, #F7EFDF 28px);
+}
+
+.map-placeholder code {
+    padding: .1rem .4rem;
+    border-radius: 6px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    font-size: .85em;
+    color: var(--fox-deep);
+}
+
+.map-unlocated {
+    margin-top: .9rem;
+    font-size: .8rem;
+    line-height: 1.7;
+    color: var(--ink-3);
+    text-align: left;
+}
+
+/* emoji 标注点（白底橘边圆牌 + 小三角尖） */
+.marker-pin {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    font-size: 19px;
+    line-height: 1;
+    background: var(--paper);
+    border: 2px solid var(--fox);
+    border-radius: 50%;
+    box-shadow: var(--sh-sm);
+    cursor: pointer;
+}
+
+.marker-pin::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: -5px;
+    width: 9px;
+    height: 9px;
+    background: var(--paper);
+    border-right: 2px solid var(--fox);
+    border-bottom: 2px solid var(--fox);
+    transform: translateX(-50%) rotate(45deg);
+}
+
+.map-popup {
+    min-width: 160px;
+    max-width: 250px;
+    text-align: left;
+    font-family: var(--font-body);
+}
+
+.map-popup-head {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+}
+
+.map-popup-emoji {
+    font-size: 1.3rem;
+    line-height: 1;
+}
+
+.map-popup-head strong {
+    font-size: .95rem;
+    color: var(--ink);
+}
+
+.map-popup-address {
+    margin-top: .4rem;
+    font-size: .8rem;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+
+.map-popup-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .25rem;
+    margin-top: .5rem;
+}
+
+.map-popup-tag {
+    font-size: .68rem;
+    line-height: 1;
+    padding: .24rem .48rem;
+    border-radius: var(--r-pill);
+    background: var(--fox-soft);
+    color: var(--fox-deep);
+}
+
+/* ---------------- 地理信息（管理页表单） ---------------- */
+
+.option-tag-geo {
+    background: var(--fox-soft);
+    border-color: transparent;
+    color: var(--fox-deep);
+}
+
+.geo-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .8rem;
+}
+
+.option-geo-row {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: .4rem;
+    min-width: 0;
+}
+
+.option-address-input {
+    flex: 2.4 1 120px;
+    min-width: 0;
+}
+
+.option-coord-input {
+    flex: 1 1 72px;
+    min-width: 0;
 }
 
 @media (max-width: 420px) {

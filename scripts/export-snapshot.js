@@ -64,7 +64,7 @@ async function main() {
     `);
 
     const options = await pool.query(`
-        SELECT o.id, o.name, o.emoji,
+        SELECT o.id, o.name, o.emoji, o.latitude, o.longitude, o.address,
                COALESCE(
                    array_agg(l.name ORDER BY l.sort_order, l.id)
                    FILTER (WHERE l.id IS NOT NULL), '{}'
@@ -82,11 +82,24 @@ async function main() {
         version: 2,
         exportedAt: new Date().toISOString(),
         lists: lists.rows.map((row) => ({ name: row.name, sortOrder: Number(row.sortOrder) })),
-        options: options.rows.map((row) => ({
-            name: row.name,
-            emoji: row.emoji,
-            lists: row.lists.length ? row.lists : ['默认榜单']
-        }))
+        options: options.rows.map((row) => {
+            const option = {
+                name: row.name,
+                emoji: row.emoji,
+                lists: row.lists.length ? row.lists : ['默认榜单']
+            };
+
+            // 已定位的店把地理信息一起带走；没定位的省略这几个键，保持快照干净
+            if (row.latitude !== null && row.longitude !== null) {
+                option.latitude = row.latitude;
+                option.longitude = row.longitude;
+            }
+            if (row.address) {
+                option.address = row.address;
+            }
+
+            return option;
+        })
     };
 
     // 保证快照里声明过的榜单都被 seed 认可：孤儿行会被挂到默认榜单，
