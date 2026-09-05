@@ -9,7 +9,7 @@
  *
  * 发版时把 CACHE 版本号 +1，旧缓存整体作废。
  */
-const CACHE = 'huliaeat-v6';
+const CACHE = 'huliaeat-v7';
 
 const PRECACHE = [
     '/',

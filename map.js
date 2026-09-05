@@ -83,11 +83,10 @@
         return sdkPromise;
     }
 
-    // 与 getPool 同源但不受「本机排除」影响：地图是看全貌，不是抽签
+    // 与 getPool 同源但不受「本机排除」影响：地图是看全貌，不是抽签。
+    // 直接复用 script.js 的 baseOptions()（全部=精选池 / 随便吃点=拓展池 / 类型标签）
     function visibleOptions() {
-        return selectedTag
-            ? foodOptions.filter((option) => (option.tags || []).includes(selectedTag))
-            : foodOptions;
+        return baseOptions();
     }
 
     function createPin(option) {

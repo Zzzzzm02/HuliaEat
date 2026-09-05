@@ -15,6 +15,7 @@ const MAX_TAGS_COUNT = 6;
 let foodOptions = [];
 let selectedTag = null; // null = 全部；字符串 = 类型标签
 let nearbyPool = null;  // 「📍 附近」模式的就近店列表（null = 未启用就近模式）
+const EXTENSION_TAG = '就近随便吃'; // 拓展池标记:「全部」默认不含,点「随便吃点」才进
 let isAnimating = false;
 let editingOptionId = null;
 let lastResult = null;
@@ -337,13 +338,26 @@ function setExcludedIds(ids) {
     renderExclusionNote();
 }
 
-// 当前生效池：就近模式优先，其次标签筛选，最后全量（再剔除本机排除项）
+// 精选池计数(「全部」与首页统计用):拓展池不计入
+function curatedCount() {
+    return foodOptions.filter((option) => !(option.tags || []).includes(EXTENSION_TAG)).length;
+}
+
+// 当前筛选下的基础池:
+//   「全部」→ 精选池;「随便吃点」→ 拓展池;其他类型标签 → 带该标签的全部店(精选+拓展)
+function baseOptions() {
+    if (selectedTag === EXTENSION_TAG) {
+        return foodOptions.filter((option) => (option.tags || []).includes(EXTENSION_TAG));
+    }
+    if (selectedTag) {
+        return foodOptions.filter((option) => (option.tags || []).includes(selectedTag));
+    }
+    return foodOptions.filter((option) => !(option.tags || []).includes(EXTENSION_TAG));
+}
+
+// 当前生效池：就近模式优先，其次按筛选取基础池（再剔除本机排除项）
 function getPool() {
-    const base = nearbyPool
-        ? nearbyPool
-        : selectedTag
-            ? foodOptions.filter((option) => (option.tags || []).includes(selectedTag))
-            : foodOptions;
+    const base = nearbyPool ? nearbyPool : baseOptions();
 
     const excluded = new Set(getExcludedIds());
     return base.filter((option) => !excluded.has(String(option.id)));
@@ -353,11 +367,7 @@ function renderExclusionNote() {
     const note = document.getElementById('exclusion-note');
     if (!note) return;
 
-    const baseSize = nearbyPool
-        ? nearbyPool.length
-        : selectedTag
-            ? foodOptions.filter((option) => (option.tags || []).includes(selectedTag)).length
-            : foodOptions.length;
+    const baseSize = nearbyPool ? nearbyPool.length : baseOptions().length;
 
     const visible = getPool().length;
     const hidden = baseSize - visible;
@@ -371,7 +381,7 @@ function renderExclusionNote() {
     note.hidden = false;
     const scope = nearbyPool
         ? `附近 1.5km 共 ${baseSize} 家`
-        : selectedTag ? `「${tagChipLabel(selectedTag)}」` : '全部店铺';
+        : selectedTag ? `「${tagChipLabel(selectedTag)}」` : '精选店铺';
     note.textContent = hidden > 0
         ? `${scope}共 ${baseSize} 家，本机已隐藏 ${hidden} 家（不影响他人）`
         : `${scope}，点「开始选择」开抽`;
@@ -396,7 +406,6 @@ function renderTagChips() {
     if (!containers.length) return;
 
     const tags = collectTags();
-    const total = foodOptions.length;
 
     containers.forEach((container) => {
         container.innerHTML = '';
@@ -404,7 +413,8 @@ function renderTagChips() {
         const allChip = document.createElement('button');
         allChip.type = 'button';
         allChip.className = `chip${selectedTag || nearbyPool ? '' : ' active'}`;
-        allChip.textContent = `全部 ${total}`;
+        allChip.textContent = `全部 ${curatedCount()}`;
+        allChip.title = '精选池；拓展池请点「随便吃点」';
         allChip.addEventListener('click', () => selectTag(null));
         container.appendChild(allChip);
 
@@ -489,7 +499,8 @@ function startNearby() {
 }
 
 function updateStats() {
-    document.getElementById('total-options').textContent = foodOptions.length;
+    // 首页统计显示精选池数量；拓展池(378 家)点「随便吃点」才进
+    document.getElementById('total-options').textContent = curatedCount();
     updateTodayCount();
 }
 
@@ -1203,9 +1214,7 @@ function renderOptionsList() {
 
     container.innerHTML = '';
 
-    const visible = selectedTag
-        ? foodOptions.filter((option) => (option.tags || []).includes(selectedTag))
-        : foodOptions;
+    const visible = baseOptions();
 
     if (!foodOptions.length) {
         const emptyState = document.createElement('p');
@@ -1218,7 +1227,9 @@ function renderOptionsList() {
     if (!visible.length) {
         const emptyState = document.createElement('p');
         emptyState.className = 'options-empty';
-        emptyState.textContent = `「${tagChipLabel(selectedTag)}」里还没有店铺，可在下方编辑里给店铺加上「${selectedTag}」标签`;
+        emptyState.textContent = selectedTag === EXTENSION_TAG
+            ? '拓展池还没有店铺，跑一次 scripts/fetch-pois.mjs 试试'
+            : `「${tagChipLabel(selectedTag)}」里还没有店铺，可在下方编辑里给店铺加上「${selectedTag}」标签`;
         container.appendChild(emptyState);
         return;
     }
