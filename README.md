@@ -256,6 +256,8 @@ schema_migrations(name, applied_at)     ← 已执行的迁移
 
 ## 更新记录
 
+- **2026-09-05 · `4cedcbb`** — 依赖安全:在 `package.json` 加 `overrides` 把 `qs` 锁到 `^6.16.0`,修掉经由 express/body-parser 传递进来的 3 个 qs DoS 公告(修复版超出上游声明的 `~` 范围,`npm audit fix` 自动够不着);express 随之升至 4.22.1,90 项冒烟全过
+- **2026-09-03 · `a7181ca`** — 导入与校验加固:批量导入的 `mode` 必须显式传值,非法值直接 400(不再默认当 `replace`);新建店铺挂榜 / membership 关联增加存在性预检,引用不存在的榜单或店铺返回 404 而非数据库外键错误;ID 解析改为严格整数校验;冒烟断言扩到 90 项;`.env.example` 补齐 compose 所需的 `POSTGRES_*` 三项
 - **2026-09-03 · `51c777c`** — 店名唯一约束（`003` 迁移合并既有重名行 + 单条/编辑重名一律 409）；`emoji-rules.js` 让关键词→Emoji 表前后端共用一份，纯 API 导入也能自动配图；PWA（manifest + Service Worker + 三张图标）；`.dockerignore` 补漏（备份目录不再进镜像）
 - **2026-09-02 · `8bc7e38`** — 修 CI 暴露的可移植性问题（`mktemp -t` 是 BSD 写法，GNU 下导致服务起不来）；运行时 Node 20（已 EOL）→ 22；checkout/setup-node 升 v7；冒烟失败细节改为 `::error::` annotation，公开 API 可读
 - **2026-09-02 · `cfaeee3`** — 多榜单：`lists` / `list_items` 多对多 + 首页榜单切换 + 管理页建榜/改名/移店；`migrations/` 启动时自动执行（001 基线、002 多榜单 + 存量回填）；结果页「最近不想吃」本机排除与「下架」分离；`HOST` 默认只绑回环；`npm run export` 快照（兼作空库种子）；18 家占位 🍽️ 全部配上手挑图标
