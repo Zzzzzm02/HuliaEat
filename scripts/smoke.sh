@@ -262,6 +262,24 @@ IMPORT_TAG=$(body "${BASE}/api/options" | node -e 'let s="";process.stdin.on("da
 expect_code "import 的标签入了库" "面|夜宵" "$IMPORT_TAG"
 expect_code "import 非法标签 → 400（整单拒绝）" 400 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"append","items":[{"name":"坏标签","emoji":"🍜","tags":[123]}]}')"
 
+# ---------------------------------------------------------------- 定位就近 + 管理锁
+section "定位就近与管理入口校验"
+# 前面的 import replace 测试会清掉带坐标的种子店，这里先补一家带坐标的
+NEAR_STORE_BODY='{"name":"就近测试店","emoji":"📍","latitude":30.274,"longitude":120.155}'
+NEAR_ID=$(body -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$NEAR_STORE_BODY" | pick_id)
+expect_code "就近测试店就位" "ok" "$([ -n "$NEAR_ID" ] && echo ok || echo empty)"
+
+NEAR_LOG="${TMPDIR:-/tmp}/huliaeat-near.$$"
+body "${BASE}/api/options?near=120.155,30.274" >"$NEAR_LOG"
+expect_has "就近筛选返回该店并带 distance_meters" "distance_meters" "$NEAR_LOG"
+expect_has "就近结果按距离排序（自身 0m）" '"distance_meters":0' "$NEAR_LOG"
+rm -f "$NEAR_LOG"
+expect_code "就近筛选：near 格式错误 → 400" 400 "$(code "${BASE}/api/options?near=abc")"
+expect_code "清理就近测试店 → 204" 204 "$(code -X DELETE "${BASE}/api/options/${NEAR_ID}" -H "x-admin-token: ${TOKEN}")"
+
+expect_code "管理解锁校验：无密钥 → 401" 401 "$(code "${BASE}/api/admin/check")"
+expect_code "管理解锁校验：对密钥 → 200" 200 "$(code "${BASE}/api/admin/check" -H "x-admin-token: ${TOKEN}")"
+
 # ---------------------------------------------------------------- 地理信息
 section "地理信息：可选但填了就必须合法"
 geo_field() { # body json-key → 值（undefined/null 原样标注）

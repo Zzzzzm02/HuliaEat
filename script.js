@@ -13,7 +13,8 @@ const MAX_TAG_LENGTH = 12;
 const MAX_TAGS_COUNT = 6;
 
 let foodOptions = [];
-let selectedTag = null; // null = 全部；字符串 = 「今天想吃X」的类型标签
+let selectedTag = null; // null = 全部；字符串 = 类型标签
+let nearbyPool = null;  // 「📍 附近」模式的就近店列表（null = 未启用就近模式）
 let isAnimating = false;
 let editingOptionId = null;
 let lastResult = null;
@@ -38,7 +39,8 @@ const TAG_CHIP_LABELS = {
     '火锅': '整点火锅',
     '烧烤': '撸串烤肉',
     '夜宵': '深夜食堂',
-    '换口味': '换换口味'
+    '换口味': '换换口味',
+    '就近随便吃': '随便吃点'
 };
 
 function tagChipLabel(tag) {
@@ -335,11 +337,13 @@ function setExcludedIds(ids) {
     renderExclusionNote();
 }
 
-// 当前标签下的可选池（已剔除本机排除项）
+// 当前生效池：就近模式优先，其次标签筛选，最后全量（再剔除本机排除项）
 function getPool() {
-    const base = selectedTag
-        ? foodOptions.filter((option) => (option.tags || []).includes(selectedTag))
-        : foodOptions;
+    const base = nearbyPool
+        ? nearbyPool
+        : selectedTag
+            ? foodOptions.filter((option) => (option.tags || []).includes(selectedTag))
+            : foodOptions;
 
     const excluded = new Set(getExcludedIds());
     return base.filter((option) => !excluded.has(String(option.id)));
@@ -349,22 +353,28 @@ function renderExclusionNote() {
     const note = document.getElementById('exclusion-note');
     if (!note) return;
 
-    const baseSize = (selectedTag
-        ? foodOptions.filter((option) => (option.tags || []).includes(selectedTag))
-        : foodOptions).length;
+    const baseSize = nearbyPool
+        ? nearbyPool.length
+        : selectedTag
+            ? foodOptions.filter((option) => (option.tags || []).includes(selectedTag)).length
+            : foodOptions.length;
 
     const visible = getPool().length;
     const hidden = baseSize - visible;
 
-    if (hidden <= 0) {
+    if (hidden <= 0 && !nearbyPool) {
         note.hidden = true;
         note.innerHTML = '';
         return;
     }
 
     note.hidden = false;
-    const scope = selectedTag ? `「${tagChipLabel(selectedTag)}」` : '全部店铺';
-    note.textContent = `${scope}共 ${baseSize} 家，本机已隐藏 ${hidden} 家（不影响他人）`;
+    const scope = nearbyPool
+        ? `附近 1.5km 共 ${baseSize} 家`
+        : selectedTag ? `「${tagChipLabel(selectedTag)}」` : '全部店铺';
+    note.textContent = hidden > 0
+        ? `${scope}共 ${baseSize} 家，本机已隐藏 ${hidden} 家（不影响他人）`
+        : `${scope}，点「开始选择」开抽`;
 
     const restore = document.createElement('button');
     restore.type = 'button';
@@ -375,10 +385,10 @@ function renderExclusionNote() {
         showManageMessage('已恢复本筛选的全部店铺', 'info');
     });
     note.appendChild(document.createTextNode(' '));
-    note.appendChild(restore);
+    if (hidden > 0) note.appendChild(restore);
 }
 
-// 首页 / 地图 / 管理页共用的筛选 chips：「全部」+「今天想吃X」
+// 首页 / 地图 / 管理页共用的筛选 chips：「全部」+「类型」；首页末尾多一个「📍 附近」
 function renderTagChips() {
     const containers = ['list-chips', 'manage-list-chips', 'map-list-chips']
         .map((id) => document.getElementById(id))
@@ -393,7 +403,7 @@ function renderTagChips() {
 
         const allChip = document.createElement('button');
         allChip.type = 'button';
-        allChip.className = `chip${selectedTag ? '' : ' active'}`;
+        allChip.className = `chip${selectedTag || nearbyPool ? '' : ' active'}`;
         allChip.textContent = `全部 ${total}`;
         allChip.addEventListener('click', () => selectTag(null));
         container.appendChild(allChip);
@@ -401,12 +411,22 @@ function renderTagChips() {
         tags.forEach(({ name, count }) => {
             const chip = document.createElement('button');
             chip.type = 'button';
-            chip.className = `chip${selectedTag === name ? ' active' : ''}`;
+            chip.className = `chip${!nearbyPool && selectedTag === name ? ' active' : ''}`;
             chip.textContent = tagChipLabel(name);
             chip.title = `${count} 家店`;
             chip.addEventListener('click', () => selectTag(name));
             container.appendChild(chip);
         });
+
+        // 就近抽签只放首页
+        if (container.id === 'list-chips') {
+            const nearChip = document.createElement('button');
+            nearChip.type = 'button';
+            nearChip.className = `chip${nearbyPool ? ' active' : ''}`;
+            nearChip.textContent = '📍 附近';
+            nearChip.addEventListener('click', startNearby);
+            container.appendChild(nearChip);
+        }
     });
 
     renderExclusionNote();
@@ -414,6 +434,7 @@ function renderTagChips() {
 
 function selectTag(tag) {
     selectedTag = tag || null;
+    nearbyPool = null; // 切走标签即退出就近模式
 
     try {
         if (selectedTag) {
@@ -429,6 +450,42 @@ function selectTag(tag) {
     renderOptionsList();
     // 地图屏跟着同一个筛选走；还没初始化时内部会静默跳过
     if (window.HuliaMap) window.HuliaMap.refresh();
+}
+
+// 就近抽签：浏览器定位 → 拉附近 1.5km 已收录的店 → 进入就近池
+function startNearby() {
+    const note = document.getElementById('exclusion-note');
+    const say = (text) => {
+        if (!note) return;
+        note.hidden = !text;
+        note.textContent = text || '';
+    };
+
+    if (!navigator.geolocation) {
+        say('这个浏览器不支持定位');
+        return;
+    }
+
+    say('正在获取定位…');
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+        try {
+            const { longitude, latitude } = pos.coords;
+            const list = await requestJson(`${API_BASE}/options?near=${longitude},${latitude}&radius=1500`);
+            if (!list.length) {
+                nearbyPool = null;
+                renderTagChips();
+                say('附近 1.5km 内还没有已收录的店，先逛逛「全部」吧');
+                return;
+            }
+            nearbyPool = list;
+            renderTagChips();
+            say(`就近模式：1.5km 内 ${list.length} 家，点「开始选择」开抽`);
+        } catch (error) {
+            say(`就近模式失败：${error.message}`);
+        }
+    }, (err) => {
+        say(`定位失败：${err.message}（页面需 HTTPS 或 localhost）`);
+    }, { timeout: 8000, maximumAge: 600000 });
 }
 
 function updateStats() {
@@ -588,6 +645,10 @@ function redrawInPlace() {
 
 let resultMapOptionId = null;
 
+function formatDistance(meters) {
+    return meters >= 1000 ? `${(meters / 1000).toFixed(1)}km` : `${meters}m`;
+}
+
 // 结果方框：已定位的店以位置缩略图为主视觉（店名/地址做成图上的小卡片），
 // 未定位的店回退到 emoji + 店名展示
 function updateResultMap(option) {
@@ -601,11 +662,14 @@ function updateResultMap(option) {
 
     resultMapOptionId = option && option.id ? option.id : null;
     const address = option && option.address ? option.address : '';
+    const distText = option && option.distance_meters != null
+        ? ` · 距你 ${formatDistance(option.distance_meters)}`
+        : '';
 
     const located = option && option.latitude != null && option.longitude != null;
     if (!located) {
         content.hidden = false;
-        addr.textContent = address ? `📍 ${address}` : '';
+        addr.textContent = address ? `📍 ${address}${distText}` : '';
         addr.hidden = !address;
         link.hidden = true;
         img.removeAttribute('src');
@@ -613,7 +677,7 @@ function updateResultMap(option) {
     }
 
     mapName.textContent = `${option.emoji || ''} ${option.name}`.trim();
-    mapAddr.textContent = address || '📍 图中标记即店铺位置';
+    mapAddr.textContent = `${address || '📍 图中标记即店铺位置'}${distText}`;
     // 加载失败（服务未配置/配额超限/网络）时回退到 emoji + 店名，不阻碍抽签主流程
     img.onerror = () => {
         link.hidden = true;
@@ -678,6 +742,38 @@ async function delistCurrentResult() {
     } catch (error) {
         showResultNote('');
         showManageMessage(`下架失败：${error.message}`, 'error');
+    }
+}
+
+/* ---------------- 管理入口锁（对普通访客隐藏，持密钥解锁） ---------------- */
+
+function revealManage() {
+    const manageBtn = document.getElementById('manage-btn');
+    if (!manageBtn) return;
+    manageBtn.hidden = false;
+    document.querySelector('.nav')?.classList.remove('two');
+}
+
+function lockManage() {
+    const manageBtn = document.getElementById('manage-btn');
+    if (!manageBtn) return;
+    manageBtn.hidden = true;
+    manageBtn.classList.remove('active');
+    document.querySelector('.nav')?.classList.add('two');
+    if (document.getElementById('manage-screen')?.classList.contains('active')) {
+        switchScreen('start-screen');
+    }
+}
+
+// 用 /api/admin/check 验密：对 → 显示管理入口并进入管理屏；错/取消 → 保持隐藏
+async function tryUnlockManage() {
+    try {
+        await requestJson(`${API_BASE}/admin/check`, { admin: true });
+        revealManage();
+        switchScreen('manage-screen');
+        showManageMessage('管理模式已解锁', 'success');
+    } catch (error) {
+        // 密钥不对或用户取消：维持隐藏
     }
 }
 
@@ -1176,6 +1272,29 @@ document.addEventListener('DOMContentLoaded', () => {
     loadOptions();
     createFloatingEmojis();
 
+    // 管理入口锁：本地存有密钥就静默验一次，对 → 常驻显示；否则隐藏
+    if (getAdminToken()) {
+        requestJson(`${API_BASE}/admin/check`, { admin: true })
+            .then(() => revealManage())
+            .catch(() => { /* 密钥失效，保持隐藏 */ });
+    }
+    // 解锁通道：URL 带 #manage，或连点 logo 5 次
+    if (location.hash === '#manage') tryUnlockManage();
+    window.addEventListener('hashchange', () => {
+        if (location.hash === '#manage') tryUnlockManage();
+    });
+    let logoTaps = 0;
+    let logoTapTimer = null;
+    document.getElementById('brand-badge')?.addEventListener('click', () => {
+        logoTaps += 1;
+        clearTimeout(logoTapTimer);
+        logoTapTimer = setTimeout(() => { logoTaps = 0; }, 1600);
+        if (logoTaps >= 5) {
+            logoTaps = 0;
+            tryUnlockManage();
+        }
+    });
+
     // PWA：只在安全上下文注册（localhost / HTTPS）；失败静默，不影响普通使用
     if ('serviceWorker' in navigator) {
         const isSecure = window.location.protocol === 'https:'
@@ -1238,6 +1357,7 @@ document.addEventListener('DOMContentLoaded', () => {
         tokenClearBtn.addEventListener('click', () => {
             setAdminToken('');
             updateTokenBadge();
+            lockManage(); // 清除密钥 = 重新上锁，管理入口对访客隐去
             showManageMessage('已清除本机保存的管理密钥', 'info');
         });
     }

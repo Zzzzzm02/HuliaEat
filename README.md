@@ -154,10 +154,11 @@ curl -X POST http://localhost:3000/api/options \
 | 接口 | 鉴权 | 说明 |
 |---|---|---|
 | `GET /api/health` | 公开 | 健康检查，含当前店铺总数 |
-| `GET /api/options` | 公开 | 全量店铺，每条含 `tags: [标签]` 与可选的 `latitude` / `longitude` / `address`；`?tag=<标签>` 可按类型过滤 |
+| `GET /api/options` | 公开 | 全量店铺，每条含 `tags: [标签]` 与可选的 `latitude` / `longitude` / `address`；`?tag=<标签>` 可按类型过滤；`?near=<经度,纬度>&radius=<米>`（默认 1500、上限 10000）按距离过滤并返回 `distance_meters`，只含已定位的店 |
 | `GET /api/options/:id` | 公开 | 单条 |
 | `GET /api/options/:id/staticmap` | 公开 | 位置缩略图（PNG）。未定位/不存在 → 404，key 未配置 → 503，上游异常 → 502 |
 | `GET /api/config` | 公开 | 地图页配置 `{ amap: { key, securityCode } }`；未配置 key 时 `amap: null` |
+| `GET /api/admin/check` | 密钥 | 管理入口解锁校验：对 → 200，错/缺 → 401。管理界面默认对访客隐藏，持密钥者经此解锁 |
 | `POST /api/options` | 密钥 | Body `{name, emoji, tags?: [标签], latitude?, longitude?, address?}`；重名返回 **409** |
 | `PUT /api/options/:id` | 密钥 | 全量更新 name / emoji；改成已有店名返回 **409**；不带坐标/标签字段时保留现值 |
 | `PATCH /api/options/:id` | 密钥 | 部分更新；同上 |
@@ -277,6 +278,8 @@ schema_migrations(name, applied_at)     ← 已执行的迁移
 ```
 
 ## 更新记录
+
+- **2026-09-05（📍 附近 + 批量店池 + 管理入口隐藏）** — 新增 `scripts/fetch-pois.mjs`：按商圈（10 个圆心）用高德 v5 周边搜索批量拉餐饮 POI，`show_fields=business` 拿评分/人均做质量过滤（≥4.2 分，糕饼/饮品/果品类剔除），378 家入库挂「就近随便吃」标签（总池 437 家）；首页新增「📍 附近」chip：浏览器定位 → `?near=` 就近 1.5km 过滤 → 就近抽签，结果缩略图带「距你 X m」；管理入口默认对访客隐藏（导航退两段式），持 `ADMIN_TOKEN` 者经 `#manage` 链接或连点 logo 5 次 + 密钥校验解锁，清除密钥即重新上锁；sw v6；冒烟扩到 113 项
 
 - **类型标签取代多榜单** — `005` 迁移：`food_options` 加 `tags TEXT[]`，分类榜单（面馆/小吃早点/夜宵烧烤/换口味）成员关系转成标签，`lists` / `list_items` 表退役；首页/地图/管理页的筛选从「榜单」换成类型标签 chips，文案走一张俏皮话映射表（吃点好的 / 嗦碗面 / 整点火锅 / 撸串烤肉 / 深夜食堂 / 垫垫肚子 / 换换口味，全部 59 家都已配齐，火锅/烤肉单独成大类）；管理页去掉榜单管理，改为每店编辑标签（新增表单同样支持）；`GET /api/options?tag=` 按标签过滤；`tags` 严格校验（数组、≤6 个、单个 ≤12 字，给了就整体替换）；快照升 v3（带标签，兼容 v1/v2 种子）；smoke 榜单断言全部重写
 

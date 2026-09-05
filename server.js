@@ -761,6 +761,12 @@ app.get('/api/config', (req, res) => {
     });
 });
 
+// 管理入口解锁校验：密钥对 → 200（前端据此显示「管理选项」），错/缺 → 401。
+// 管理界面本身对普通访客隐藏，只有持有 ADMIN_TOKEN 的人能解锁
+app.get('/api/admin/check', requireAdmin, (req, res) => {
+    res.json({ ok: true });
+});
+
 const OPTIONS_SELECT = `
     SELECT o.id, o.name, o.emoji, o.latitude, o.longitude, o.address, o.tags
     FROM food_options o
@@ -769,6 +775,30 @@ const OPTIONS_SELECT = `
 app.get('/api/options', async (req, res, next) => {
     try {
         const tag = normalizeText(req.query.tag);
+        const nearRaw = normalizeText(req.query.near);
+
+        // 定位就近模式：near=经度,纬度，可选 radius（米，默认 1500，上限 10000）。
+        // 只返回已定位的店，按距离升序，带 distance_meters
+        if (nearRaw) {
+            const parts = nearRaw.split(',').map(Number);
+            if (parts.length !== 2 || !parts.every(Number.isFinite)) {
+                return res.status(400).json({ error: 'near 格式应为 经度,纬度' });
+            }
+            const [lng, lat] = parts;
+            const radius = Math.min(Math.max(Number(req.query.radius) || 1500, 100), 10000);
+            const distExpr = `(6371000 * acos(least(1::float8, greatest(-1::float8,
+                cos(radians($1)) * cos(radians(o.latitude)) * cos(radians(o.longitude) - radians($2))
+                + sin(radians($1)) * sin(radians(o.latitude))))))`;
+            const result = await pool.query(
+                `SELECT o.id, o.name, o.emoji, o.latitude, o.longitude, o.address, o.tags,
+                        round(${distExpr})::int AS distance_meters
+                 FROM food_options o
+                 WHERE o.latitude IS NOT NULL AND ${distExpr} <= $3
+                 ORDER BY ${distExpr} ASC`,
+                [lat, lng, radius]
+            );
+            return res.json(result.rows);
+        }
 
         const params = [];
         let where = '';

@@ -317,6 +317,15 @@ body::after {
     transform: translateX(200%);
 }
 
+/* 管理入口隐藏时导航退回两段式 */
+.nav.two {
+    width: 210px;
+}
+
+.nav.two::before {
+    width: calc((100% - 8px) / 2);
+}
+
 .nav-btn {
     position: relative;
     z-index: 1;

@@ -25,7 +25,7 @@
     <div class="container">
         <header class="header">
             <div class="brand">
-                <span class="brand-badge">
+                <span class="brand-badge" id="brand-badge" title="">
                     <img src="./image1/eateat.jpg" class="logo-image" alt="狐狸今天吃什么">
                 </span>
                 <div class="brand-text">
@@ -48,10 +48,11 @@
             </div>
         </header>
 
-        <nav class="nav">
+        <nav class="nav two">
             <button id="home-btn" class="nav-btn active">首页</button>
             <button id="map-btn" class="nav-btn">地图</button>
-            <button id="manage-btn" class="nav-btn">管理选项</button>
+            <!-- 管理入口默认隐藏：持密钥者通过 #manage 或连点 logo 5 次解锁 -->
+            <button id="manage-btn" class="nav-btn" hidden>管理选项</button>
         </nav>
 
         <main class="main">
