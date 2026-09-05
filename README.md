@@ -7,10 +7,10 @@
 ## 关键特性
 
 - 随机抽取餐饮选项（前端动画）
-- **地图页**：已定位的店标在高德地图上（emoji 圆形标记 + 详情气泡），按榜单筛选；地理信息可选，但填了就必须合法
-- **多榜单**：一家店可同时属于多个榜单（杭州榜 / 日常食堂 / 请客榜…），首页顶部一键切换
+- **地图页**：已定位的店标在高德地图上（emoji 圆形标记 + 详情气泡），按类型筛选；**结果方框直接显示抽中店铺的位置缩略图**，点击跳到地图屏并弹出该店气泡；地理信息可选，但填了就必须合法
+- **类型标签**：每家店挂 0~6 个类型标签（杭帮菜 / 面 / 小吃 / 烧烤 / 夜宵 / 换口味…），首页顶部「今天想吃X」一键切换；一家店可同时有多个标签
 - 抽到不想吃的店可「最近不想吃」当场排除，**只影响本机**，不波及他人；有密钥的人可直接下架
-- 管理页支持新增、编辑、删除、批量导入、榜单增删改名与店铺归类
+- 管理页支持新增、编辑、删除、批量导入，以及给每家店编辑类型标签
 - **店名全库唯一**：单条新增与批量导入都按名去重，不会出现两行同一家店
 - 后端完整 REST API，**写接口受管理密钥保护**
 - **PWA**：手机浏览器「添加到主屏幕」后以独立窗口打开，图标齐全；断网时至少能打开上次的界面
@@ -23,8 +23,8 @@
 
 | 能力 | 暴露面 |
 |---|---|
-| 读接口（`GET /api/health`、`GET /api/options`、`GET /api/options/:id`、`GET /api/lists`、`GET /api/config`） | 公开，任何人可抽一次吃的；跨域读取也开放。`/api/config` 只含高德 JSAPI key 与安全密钥（本来就是给浏览器用的公开值，建议在高德控制台配域名白名单） |
-| 写接口（`POST/PUT/PATCH/DELETE /api/options*`、`POST/PATCH/DELETE /api/lists*`、`POST /api/lists/:id/membership`） | 需要管理密钥；`import` 的 `replace` 模式会 `TRUNCATE` 整表，务必保管好密钥 |
+| 读接口（`GET /api/health`、`GET /api/options`、`GET /api/options/:id`、`GET /api/options/:id/staticmap`、`GET /api/lists`、`GET /api/config`） | 公开，任何人可抽一次吃的；跨域读取也开放。`/api/config` 只含高德 JSAPI key 与安全密钥（本来就是给浏览器用的公开值，建议在高德控制台配域名白名单）；`staticmap` 是结果页缩略图，由服务端代理高德静态地图 API，**Web 服务 key 不出服务端** |
+| 写接口（`POST/PUT/PATCH/DELETE /api/options*`） | 需要管理密钥；`import` 的 `replace` 模式会 `TRUNCATE` 整表，务必保管好密钥 |
 | 静态资源 | 仅 `/`、`/styles.css`、`/script.js`、`/map.js`、`/emoji-rules.js`、`/sw.js`、`/manifest.webmanifest`、`/icons/*`、`/image1/*`，其余（源码、`data/`、`.git/`）返回 404 |
 
 写接口密钥通过 `x-admin-token: <ADMIN_TOKEN>` 或 `Authorization: Bearer <ADMIN_TOKEN>` 头传递。管理页首次触发写操作时会弹窗索取密钥，输入后保存在浏览器 `localStorage`，可在「管理选项」页顶部重新设置或清除。
@@ -34,7 +34,7 @@
 | 动作 | 谁做 | 效果 | 存储位置 |
 |---|---|---|---|
 | 🙅 最近不想吃 | 任何访客 | 本机不再抽到这家，可随时「恢复全部」 | 浏览器 `localStorage` |
-| 🗑️ 从菜单下架 | 只有已填密钥的设备才看得到这个按钮 | 全库删除这家店（所有榜单都没了） | PostgreSQL |
+| 🗑️ 从菜单下架 | 只有已填密钥的设备才看得到这个按钮 | 全库删除这家店 | PostgreSQL |
 
 另外五条默认策略：
 
@@ -75,7 +75,7 @@ node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
 | `TRUST_PROXY` | 反向代理后取真实客户端 IP，`true` / `false` | `false` |
 | `AMAP_JSAPI_KEY` | 高德「Web端 (JS API)」key，前端地图用，随 `/api/config` 公开下发 | 空（地图页显示配置指引） |
 | `AMAP_SECURITY_CODE` | 上面对应的安全密钥（jscode），一并下发给前端 | 空 |
-| `AMAP_WEB_KEY` | 高德「Web 服务」key，只给 `npm run geocode` 批量查坐标用，不下发前端 | 空 |
+| `AMAP_WEB_KEY` | 高德「Web 服务」key，只在服务端用：`npm run geocode` 批量查坐标 + 结果页缩略图代理，不下发前端 | 空（缩略图块自动隐藏） |
 
 参考：`.env.example`
 
@@ -154,26 +154,19 @@ curl -X POST http://localhost:3000/api/options \
 | 接口 | 鉴权 | 说明 |
 |---|---|---|
 | `GET /api/health` | 公开 | 健康检查，含当前店铺总数 |
-| `GET /api/options` | 公开 | 全量店铺，每条含 `lists: [{id,name}]` 与可选的 `latitude` / `longitude` / `address`；`?list=<榜单id>` 可按榜过滤 |
+| `GET /api/options` | 公开 | 全量店铺，每条含 `tags: [标签]` 与可选的 `latitude` / `longitude` / `address`；`?tag=<标签>` 可按类型过滤 |
 | `GET /api/options/:id` | 公开 | 单条 |
+| `GET /api/options/:id/staticmap` | 公开 | 位置缩略图（PNG）。未定位/不存在 → 404，key 未配置 → 503，上游异常 → 502 |
 | `GET /api/config` | 公开 | 地图页配置 `{ amap: { key, securityCode } }`；未配置 key 时 `amap: null` |
-| `POST /api/options` | 密钥 | Body `{name, emoji, listIds?: [1,2], latitude?, longitude?, address?}`；不给 `listIds` 时归入默认榜单；重名返回 **409** |
-| `PUT /api/options/:id` | 密钥 | 全量更新 name / emoji；改成已有店名返回 **409**；不带坐标字段时坐标保留 |
+| `POST /api/options` | 密钥 | Body `{name, emoji, tags?: [标签], latitude?, longitude?, address?}`；重名返回 **409** |
+| `PUT /api/options/:id` | 密钥 | 全量更新 name / emoji；改成已有店名返回 **409**；不带坐标/标签字段时保留现值 |
 | `PATCH /api/options/:id` | 密钥 | 部分更新；同上 |
-| `DELETE /api/options/:id` | 密钥 | **删除店铺本身**，连带解除它在所有榜单里的关联 |
-| `POST /api/options/import` | 密钥 | Body `{mode:"append"\|"replace", items:[{name,emoji,latitude?,longitude?,address?}], listId?}`；重名不新建行而是复用并挂进目标榜；`replace` 会 `TRUNCATE` 店铺与全部关联，**不可撤销** |
+| `DELETE /api/options/:id` | 密钥 | **删除店铺本身** |
+| `POST /api/options/import` | 密钥 | Body `{mode:"append"\|"replace", items:[{name,emoji,tags?,latitude?,longitude?,address?}]}`；重名不新建行而是复用；`replace` 会 `TRUNCATE` 店铺表，**不可撤销** |
 
-### 榜单
+标签规则：最多 6 个、单个 ≤ 12 字、自动去重去空；请求里给了 `tags` 就整体替换（空数组 = 清除），非法项整个请求 400。筛选用 `GET /api/options?tag=<标签>`，标签不存在返回空数组。
 
-| 接口 | 鉴权 | 说明 |
-|---|---|---|
-| `GET /api/lists` | 公开 | 榜单列表，含每个榜的店铺数 |
-| `POST /api/lists` | 密钥 | Body `{name}`；同名返回 409 |
-| `PATCH /api/lists/:id` | 密钥 | Body `{name?, sortOrder?}` —— 改名与排序 |
-| `DELETE /api/lists/:id` | 密钥 | 只删榜单与关联，**店铺本身保留** |
-| `POST /api/lists/:id/membership` | 密钥 | Body `{mode:"add"\|"remove"\|"replace", optionIds:[...]}` |
-
-非法 id / 非法 mode 一律 400，不存在的资源 404；`GET /api/options?list=<已删除的榜>` 返回空数组而不是报错。
+> 历史：v2 的多榜单体系（`lists` / `list_items`）已由 `005_tags_replace_lists.sql` 退役，原分类榜单的成员关系转换成了 `tags`。
 
 ### 地理信息（可选字段）的严格校验
 
@@ -190,7 +183,7 @@ curl -X POST http://localhost:3000/api/options \
 npm run smoke
 ```
 
-`scripts/smoke.sh` 会在一个**临时 PostgreSQL schema** 中跑完 109 项断言（鉴权、静态越界读取、跨域写、爆破限流、启动策略、CRUD、批量导入、多榜单语义、地理信息校验、PWA 静态资源），结束即 `drop schema`，不触碰 `public` 的正式数据。需要本机 PostgreSQL 可用且账号有建 schema 的权限。
+`scripts/smoke.sh` 会在一个**临时 PostgreSQL schema** 中跑完全部断言（鉴权、静态越界读取、跨域写、爆破限流、启动策略、CRUD、批量导入、类型标签语义、地理信息校验、PWA 静态资源），结束即 `drop schema`，不触碰 `public` 的正式数据。需要本机 PostgreSQL 可用且账号有建 schema 的权限。
 
 连接信息一律来自环境，**脚本里不内置任何默认口令**：优先读仓库根目录的 `.env`，也可用 `SMOKE_PGHOST` / `SMOKE_PGPORT` / `SMOKE_PGDATABASE` / `SMOKE_PGUSER` / `SMOKE_PGPASSWORD` 覆盖；拿不到就退出码 2。测试用密钥每次随机生成，不落盘。
 
@@ -201,30 +194,27 @@ CI：`.github/workflows/smoke.yml` 用一次性 `postgres:16-alpine` 服务容�
 三张表，多对多：
 
 ```text
-food_options(id, name, emoji, latitude, longitude, address, ...)  ← 一家店的唯一真相（地理字段可空）
-lists(id, name, sort_order, ...)        ← 榜单
-list_items(list_id, option_id, ...)     ← 关联（两家榜可同时含同一店）
+food_options(id, name, emoji, tags[], latitude, longitude, address, ...)  ← 一家店的唯一真相（tags = 类型标签）
 schema_migrations(name, applied_at)     ← 已执行的迁移
 ```
 
-- 店只存一份，所以改 emoji 不会因它出现在多个榜单而分裂。
-- `list_items` 两个外键都是 `ON DELETE CASCADE`：删店自动清关联，删榜也自动清关联。
-- **加字段就新增一个 `migrations/NNN_名字.sql`**，服务启动时按文件名顺序执行，每个迁移单独包一层事务（失败回滚且不记录，下次重试）。老库里 `food_options` 早就存在，所以 001 用 `IF NOT EXISTS` 做成无害的空操作基线。
+- 标签存数组（最多 6 个、单个 ≤ 12 字），「今天想吃X」筛选直接按标签过滤；老的多榜单表 `lists` / `list_items` 已在 `005` 迁移中退役。
+- 加字段就新增一个 `migrations/NNN_名字.sql`，服务启动时按文件名顺序执行，每个迁移单独包一层事务（失败回滚且不记录，下次重试）。老库里 `food_options` 早就存在，所以 001 用 `IF NOT EXISTS` 做成无害的空操作基线。
 - 迁移只在启动时跑，没有独立的 CLI 步骤 —— `docker restart` / `npm start` 即可完成升级。
 
 ### 快照：`npm run export`
 
 把当前数据库导出成受 git 跟踪的 `data/options.json`。这份文件同时是：
 
-1. 空库首次启动的种子（`SEED_FILE` 直接读它，v1 裸数组与 v2 多榜单两种格式都认）；
+1. 空库首次启动的种子（`SEED_FILE` 直接读它，v1 裸数组 / v2 多榜单 / v3 类型标签三种格式都认）；
 2. 菜单历史的版本化副本 —— 提交后 `git log -p data/options.json` 就能看菜单演变；
 3. 唯一的离线副本 —— 跑迁移或做批量替换前的安全垫。
 
-改完榜单顺手 `npm run export` 一次并提交即可。另有一份 `pg_dump` 级的紧急备份放在 `data/backups/`（**已 gitignore**，不进仓库）。
+改完菜单或标签顺手 `npm run export` 一次并提交即可。另有一份 `pg_dump` 级的紧急备份放在 `data/backups/`（**已 gitignore**，不进仓库）。
 
 ## 地图页：高德标注
 
-「地图」屏把已定位的店标在高德地图上（emoji 圆形标记，点击弹店名 / 地址 / 榜单气泡），顶部的榜单筛选与首页共用同一个选中态。需要两把免费的高德 key（[lbs.amap.com](https://lbs.amap.com) 注册个人开发者）：
+「地图」屏把已定位的店标在高德地图上（emoji 圆形标记，点击弹店名 / 地址 / 类型气泡），顶部的类型筛选与首页共用同一个选中态。需要两把免费的高德 key（[lbs.amap.com](https://lbs.amap.com) 注册个人开发者）：
 
 | Key 类型 | 环境变量 | 用途 |
 |---|---|---|
@@ -256,7 +246,7 @@ schema_migrations(name, applied_at)     ← 已执行的迁移
 .
 ├── index.html              # 单页前端（首页 / 地图 / 结果 / 管理四屏）
 ├── styles.css              # 暖色「狐狸食堂」主题
-├── script.js               # 前端逻辑 + 榜单切换 + 本机排除 + 管理密钥处理
+├── script.js               # 前端逻辑 + 类型标签筛选 + 本机排除 + 管理密钥处理
 ├── map.js                  # 地图屏：高德 JSAPI 动态加载 + emoji 标注（按需加载）
 ├── emoji-rules.js          # 关键词→Emoji 规则，前后端共用唯一一份
 ├── sw.js                   # Service Worker（缓存策略写在文件头注释里）
@@ -267,7 +257,8 @@ schema_migrations(name, applied_at)     ← 已执行的迁移
 │   ├── 001_init.sql        # 基线结构（幂等）
 │   ├── 002_lists.sql       # 多榜单 + 存量数据回填
 │   ├── 003_unique_name.sql # 店名唯一 + 既有重名行合并
-│   └── 004_add_location.sql# 地理信息（经纬度 + 地址，可空）
+│   ├── 004_add_location.sql# 地理信息（经纬度 + 地址，可空）
+│   └── 005_tags_replace_lists.sql # 类型标签登场，lists/list_items 退役
 ├── scripts/
 │   ├── smoke.sh            # 安全与接口冒烟测试（109 项断言）
 │   ├── export-snapshot.js  # 数据库 → data/options.json 快照
@@ -286,6 +277,10 @@ schema_migrations(name, applied_at)     ← 已执行的迁移
 ```
 
 ## 更新记录
+
+- **类型标签取代多榜单** — `005` 迁移：`food_options` 加 `tags TEXT[]`，分类榜单（面馆/小吃早点/夜宵烧烤/换口味）成员关系转成标签，`lists` / `list_items` 表退役；首页/地图/管理页的筛选从「榜单」换成类型标签 chips，文案走一张俏皮话映射表（吃点好的 / 嗦碗面 / 整点火锅 / 撸串烤肉 / 深夜食堂 / 垫垫肚子 / 换换口味，全部 59 家都已配齐，火锅/烤肉单独成大类）；管理页去掉榜单管理，改为每店编辑标签（新增表单同样支持）；`GET /api/options?tag=` 按标签过滤；`tags` 严格校验（数组、≤6 个、单个 ≤12 字，给了就整体替换）；快照升 v3（带标签，兼容 v1/v2 种子）；smoke 榜单断言全部重写
+
+- **2026-09-05（结果页位置缩略图）** — 抽中已定位的店时，结果方框直接显示高德静态地图缩略图（店名/地址做成图上的小卡片），emoji+大字店名退位为未定位店铺的回退展示；点击缩略图跳到地图屏并弹出该店气泡。新增 `GET /api/options/:id/staticmap` 服务端代理：**Web 服务 key 不出服务端，并对高德个人 key 的 QPS 限流做退避重试**；`HuliaMap.focus()` 支持按店定位弹泡；sw 缓存版本 v4；冒烟扩到 112 项。修复两处抽签体验问题：缩略图模式会让下一轮动画跑在隐藏容器里（看起来像"动画没加载"），现在每轮动画开始前先复位方框；「再抽一次」改为结果屏原地重抽，不再把用户送回首页
 
 - **2026-09-05 · `93b940e`** — 第四屏「地图」：高德 JSAPI 动态加载 + emoji 标注 + 榜单筛选；`004` 迁移给 `food_options` 加 `latitude` / `longitude` / `address`（可空）；所有写接口对坐标做严格校验（成对、范围、null 清除，非法整单 400）；`GET /api/config` 公开下发地图 key；`npm run geocode` 用「Web 服务」key 批量查坐标（提示词在 `scripts/geocode-hints.json`）；快照与种子支持坐标回灌；冒烟扩到 109 项
 - **2026-09-05 · `3de9b91`** — 依赖安全:在 `package.json` 加 `overrides` 把 `qs` 锁到 `^6.16.0`,修掉经由 express/body-parser 传递进来的 3 个 qs DoS 公告(修复版超出上游声明的 `~` 范围,`npm audit fix` 自动够不着);express 随之升至 4.22.1,90 项冒烟全过

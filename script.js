@@ -3,24 +3,24 @@ const API_BASE = `${window.location.origin}/api`;
 const TODAY_COUNT_KEY = 'today_count';
 const LAST_DATE_KEY = 'last_date';
 const ADMIN_TOKEN_KEY = 'hulia_admin_token';
-const SELECTED_LIST_KEY = 'selected_list_id';
+const SELECTED_TAG_KEY = 'selected_tag';
 const EXCLUDED_KEY = 'excluded_option_ids';
 
 const MAX_NAME_LENGTH = 40;
 const MAX_EMOJI_LENGTH = 8;
-
-const ALL_LISTS_ID = 0;
+const MAX_ADDRESS_LENGTH = 200;
+const MAX_TAG_LENGTH = 12;
+const MAX_TAGS_COUNT = 6;
 
 let foodOptions = [];
-let lists = [];
-let selectedListId = ALL_LISTS_ID;
+let selectedTag = null; // null = 全部；字符串 = 「今天想吃X」的类型标签
 let isAnimating = false;
 let editingOptionId = null;
 let lastResult = null;
 
 try {
-    const stored = Number.parseInt(localStorage.getItem(SELECTED_LIST_KEY), 10);
-    if (Number.isInteger(stored) && stored > 0) selectedListId = stored;
+    const stored = localStorage.getItem(SELECTED_TAG_KEY);
+    if (stored) selectedTag = stored;
 } catch (error) {
     // localStorage 不可用时保持「全部」
 }
@@ -29,6 +29,21 @@ try {
 const EMOJI_RULES = window.HULIA_EMOJI_RULES || [];
 
 const DEFAULT_IMPORT_EMOJI = '🍽️';
+
+/* 标签 → 筛选 chip 文案：短句、俏皮，不追求严格分类；没收录的标签回退「今天想吃X」 */
+const TAG_CHIP_LABELS = {
+    '杭帮菜': '吃点好的',
+    '面': '嗦碗面',
+    '小吃': '垫垫肚子',
+    '火锅': '整点火锅',
+    '烧烤': '撸串烤肉',
+    '夜宵': '深夜食堂',
+    '换口味': '换换口味'
+};
+
+function tagChipLabel(tag) {
+    return TAG_CHIP_LABELS[tag] || `今天想吃${tag}`;
+}
 
 /* 杭州必吃榜常客 / 杭帮菜名店示例名单（管理页可一键载入） */
 const HANGZHOU_SAMPLE = [
@@ -93,22 +108,17 @@ async function runImport(mode) {
             method: 'POST',
             admin: true,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(
-                selectedListId === ALL_LISTS_ID
-                    ? { mode, items }
-                    : { mode, items, listId: Number(selectedListId) }
-            )
+            body: JSON.stringify({ mode, items })
         });
 
         foodOptions = result.options;
         editingOptionId = null;
-        await loadLists();
         updateStats();
+        renderTagChips();
         renderOptionsList();
 
         const modeText = mode === 'replace' ? '替换' : '追加';
-        const target = selectedListId === ALL_LISTS_ID ? '' : `（归入「${currentList().name}」）`;
-        showManageMessage(`${modeText}成功，当前共 ${result.total} 家${target}`, 'success');
+        showManageMessage(`${modeText}成功，当前共 ${result.total} 家`, 'success');
 
         if (mode === 'replace') {
             textarea.value = '';
@@ -258,7 +268,7 @@ async function loadOptions({ silent = false } = {}) {
         const options = await requestJson(`${API_BASE}/options`);
         foodOptions = options;
         updateStats();
-        renderListChips(); // /lists 常比 /options 先返回，chips 上的「全部」计数需要这里补一次
+        renderTagChips();
         // 数据晚于地图首绘到达时补一次重绘（地图未初始化时内部静默跳过）
         if (window.HuliaMap) window.HuliaMap.refresh();
 
@@ -277,37 +287,29 @@ async function loadOptions({ silent = false } = {}) {
     }
 }
 
-/* ---------------- 榜单与本机排除 ---------------- */
+/* ---------------- 类型标签与本机排除 ---------------- */
 
-async function loadLists({ silent = true } = {}) {
-    try {
-        lists = await requestJson(`${API_BASE}/lists`);
-
-        // 选中的榜单可能已被删除：回落到「全部」
-        if (selectedListId !== ALL_LISTS_ID && !lists.some((list) => String(list.id) === String(selectedListId))) {
-            selectedListId = ALL_LISTS_ID;
-            try {
-                localStorage.removeItem(SELECTED_LIST_KEY);
-            } catch (error) {
-                // ignore
-            }
-        }
-
-        renderListChips();
-        renderListsAdmin();
-        renderOptionsList();
-        updateStats();
-    } catch (error) {
-        console.error('加载榜单失败:', error);
-        if (!silent) {
-            showManageMessage(`榜单加载失败：${error.message}`, 'error');
+// 从全量数据里聚合出标签（前端自己算，不再有 /api/lists）
+function collectTags() {
+    const counts = new Map();
+    for (const option of foodOptions) {
+        for (const tag of option.tags || []) {
+            counts.set(tag, (counts.get(tag) || 0) + 1);
         }
     }
-}
-
-function currentList() {
-    if (selectedListId === ALL_LISTS_ID) return null;
-    return lists.find((list) => String(list.id) === String(selectedListId)) || null;
+    // 选中的标签可能已经没有任何店：静默回落到「全部」
+    if (selectedTag && !counts.has(selectedTag)) {
+        selectedTag = null;
+        try {
+            localStorage.removeItem(SELECTED_TAG_KEY);
+        } catch (error) {
+            // ignore
+        }
+        return [];
+    }
+    return [...counts.entries()]
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh'));
 }
 
 function getExcludedIds() {
@@ -333,11 +335,11 @@ function setExcludedIds(ids) {
     renderExclusionNote();
 }
 
-// 当前榜单下的可选池（已剔除本机排除项）
+// 当前标签下的可选池（已剔除本机排除项）
 function getPool() {
-    const base = selectedListId === ALL_LISTS_ID
-        ? foodOptions
-        : foodOptions.filter((option) => (option.lists || []).some((list) => String(list.id) === String(selectedListId)));
+    const base = selectedTag
+        ? foodOptions.filter((option) => (option.tags || []).includes(selectedTag))
+        : foodOptions;
 
     const excluded = new Set(getExcludedIds());
     return base.filter((option) => !excluded.has(String(option.id)));
@@ -347,9 +349,9 @@ function renderExclusionNote() {
     const note = document.getElementById('exclusion-note');
     if (!note) return;
 
-    const baseSize = (selectedListId === ALL_LISTS_ID
-        ? foodOptions
-        : foodOptions.filter((option) => (option.lists || []).some((list) => String(list.id) === String(selectedListId)))).length;
+    const baseSize = (selectedTag
+        ? foodOptions.filter((option) => (option.tags || []).includes(selectedTag))
+        : foodOptions).length;
 
     const visible = getPool().length;
     const hidden = baseSize - visible;
@@ -361,7 +363,8 @@ function renderExclusionNote() {
     }
 
     note.hidden = false;
-    note.textContent = `本榜单 ${baseSize} 家，本机已隐藏 ${hidden} 家（不影响他人）`;
+    const scope = selectedTag ? `「${tagChipLabel(selectedTag)}」` : '全部店铺';
+    note.textContent = `${scope}共 ${baseSize} 家，本机已隐藏 ${hidden} 家（不影响他人）`;
 
     const restore = document.createElement('button');
     restore.type = 'button';
@@ -369,18 +372,20 @@ function renderExclusionNote() {
     restore.textContent = '恢复全部';
     restore.addEventListener('click', () => {
         setExcludedIds([]);
-        showManageMessage('已恢复本榜单的全部店铺', 'info');
+        showManageMessage('已恢复本筛选的全部店铺', 'info');
     });
     note.appendChild(document.createTextNode(' '));
     note.appendChild(restore);
 }
 
-function renderListChips() {
+// 首页 / 地图 / 管理页共用的筛选 chips：「全部」+「今天想吃X」
+function renderTagChips() {
     const containers = ['list-chips', 'manage-list-chips', 'map-list-chips']
         .map((id) => document.getElementById(id))
         .filter(Boolean);
     if (!containers.length) return;
 
+    const tags = collectTags();
     const total = foodOptions.length;
 
     containers.forEach((container) => {
@@ -388,17 +393,18 @@ function renderListChips() {
 
         const allChip = document.createElement('button');
         allChip.type = 'button';
-        allChip.className = `chip${selectedListId === ALL_LISTS_ID ? ' active' : ''}`;
+        allChip.className = `chip${selectedTag ? '' : ' active'}`;
         allChip.textContent = `全部 ${total}`;
-        allChip.addEventListener('click', () => selectList(ALL_LISTS_ID));
+        allChip.addEventListener('click', () => selectTag(null));
         container.appendChild(allChip);
 
-        lists.forEach((list) => {
+        tags.forEach(({ name, count }) => {
             const chip = document.createElement('button');
             chip.type = 'button';
-            chip.className = `chip${String(list.id) === String(selectedListId) ? ' active' : ''}`;
-            chip.textContent = `${list.name} ${list.count}`;
-            chip.addEventListener('click', () => selectList(list.id));
+            chip.className = `chip${selectedTag === name ? ' active' : ''}`;
+            chip.textContent = tagChipLabel(name);
+            chip.title = `${count} 家店`;
+            chip.addEventListener('click', () => selectTag(name));
             container.appendChild(chip);
         });
     });
@@ -406,197 +412,24 @@ function renderListChips() {
     renderExclusionNote();
 }
 
-function selectList(listId) {
-    selectedListId = listId === ALL_LISTS_ID ? ALL_LISTS_ID : Number(listId) || ALL_LISTS_ID;
+function selectTag(tag) {
+    selectedTag = tag || null;
 
     try {
-        if (selectedListId === ALL_LISTS_ID) {
-            localStorage.removeItem(SELECTED_LIST_KEY);
+        if (selectedTag) {
+            localStorage.setItem(SELECTED_TAG_KEY, selectedTag);
         } else {
-            localStorage.setItem(SELECTED_LIST_KEY, String(selectedListId));
+            localStorage.removeItem(SELECTED_TAG_KEY);
         }
     } catch (error) {
         // ignore
     }
 
-    renderListChips();
+    renderTagChips();
     renderOptionsList();
-    renderListsAdmin();
     // 地图屏跟着同一个筛选走；还没初始化时内部会静默跳过
     if (window.HuliaMap) window.HuliaMap.refresh();
 }
-
-function renderListsAdmin() {
-    const container = document.getElementById('lists-container');
-    if (!container) return;
-
-    container.innerHTML = '';
-
-    if (!lists.length) {
-        const empty = document.createElement('p');
-        empty.className = 'options-empty';
-        empty.textContent = '还没有榜单';
-        container.appendChild(empty);
-        return;
-    }
-
-    lists.forEach((list) => {
-        const row = document.createElement('div');
-        row.className = 'list-row';
-
-        const name = document.createElement('span');
-        name.className = 'list-row-name';
-        name.textContent = list.name;
-
-        const count = document.createElement('span');
-        count.className = 'list-row-count';
-        count.textContent = `${list.count} 家`;
-
-        row.appendChild(name);
-        row.appendChild(count);
-
-        const actions = document.createElement('div');
-        actions.className = 'list-row-actions';
-
-        actions.appendChild(createButton('改名', 'option-btn edit', async () => {
-            const input = window.prompt('榜单名称：', list.name);
-            if (input === null) return;
-
-            const nextName = input.trim();
-            if (!nextName || nextName === list.name) return;
-
-            try {
-                await requestJson(`${API_BASE}/lists/${list.id}`, {
-                    method: 'PATCH',
-                    admin: true,
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: nextName })
-                });
-                await loadLists();
-                showManageMessage('榜单已改名', 'success');
-            } catch (error) {
-                showManageMessage(`改名失败：${error.message}`, 'error');
-            }
-        }));
-
-        actions.appendChild(createButton('删除', 'option-btn delete', async () => {
-            const ok = window.confirm(`删除榜单「${list.name}」？\n\n只会解除关联，${list.count} 家店铺本身会保留。`);
-            if (!ok) return;
-
-            try {
-                await requestNoContent(`${API_BASE}/lists/${list.id}`, { method: 'DELETE', admin: true });
-                if (String(selectedListId) === String(list.id)) selectList(ALL_LISTS_ID);
-                await Promise.all([loadLists(), loadOptions({ silent: true })]);
-                showManageMessage('榜单已删除，店铺仍保留在「全部」里', 'success');
-            } catch (error) {
-                showManageMessage(`删除失败：${error.message}`, 'error');
-            }
-        }));
-
-        row.appendChild(actions);
-        container.appendChild(row);
-    });
-
-    renderMembershipPicker();
-}
-
-// 「把已有店铺加入当前榜单」的下拉：只列出尚未属于当前榜单的店
-function renderMembershipPicker() {
-    const row = document.getElementById('membership-row');
-    const select = document.getElementById('membership-select');
-    if (!row || !select) return;
-
-    const list = currentList();
-    if (!list) {
-        row.hidden = true;
-        select.innerHTML = '';
-        return;
-    }
-
-    const candidates = foodOptions.filter((option) =>
-        !(option.lists || []).some((item) => String(item.id) === String(list.id))
-    );
-
-    if (!candidates.length) {
-        row.hidden = true;
-        select.innerHTML = '';
-        return;
-    }
-
-    select.innerHTML = '';
-    candidates.forEach((option) => {
-        const element = document.createElement('option');
-        element.value = option.id;
-        element.textContent = `${option.emoji} ${option.name}`;
-        select.appendChild(element);
-    });
-
-    row.hidden = false;
-}
-
-async function createList() {
-    const input = document.getElementById('new-list-name');
-    const name = input.value.trim();
-
-    if (!name) {
-        showManageMessage('请输入榜单名称', 'error');
-        return;
-    }
-
-    try {
-        await requestJson(`${API_BASE}/lists`, {
-            method: 'POST',
-            admin: true,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name })
-        });
-
-        input.value = '';
-        await loadLists();
-        showManageMessage(`榜单「${name}」已创建`, 'success');
-    } catch (error) {
-        showManageMessage(`创建失败：${error.message}`, 'error');
-    }
-}
-
-async function addOptionToCurrentList() {
-    const list = currentList();
-    const select = document.getElementById('membership-select');
-    if (!list || !select || !select.value) return;
-
-    try {
-        await requestJson(`${API_BASE}/lists/${list.id}/membership`, {
-            method: 'POST',
-            admin: true,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mode: 'add', optionIds: [Number(select.value)] })
-        });
-
-        await Promise.all([loadLists(), loadOptions({ silent: true })]);
-        renderListChips();
-        showManageMessage('已加入当前榜单', 'success');
-    } catch (error) {
-        showManageMessage(`加入失败：${error.message}`, 'error');
-    }
-}
-
-async function removeOptionFromList(option, listId) {
-    try {
-        await requestJson(`${API_BASE}/lists/${listId}/membership`, {
-            method: 'POST',
-            admin: true,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mode: 'remove', optionIds: [Number(option.id)] })
-        });
-
-        await Promise.all([loadLists(), loadOptions({ silent: true })]);
-        renderListChips();
-        showManageMessage('已从该榜单移出（店铺本身保留）', 'success');
-    } catch (error) {
-        showManageMessage(`移出失败：${error.message}`, 'error');
-    }
-}
-
 
 function updateStats() {
     document.getElementById('total-options').textContent = foodOptions.length;
@@ -703,6 +536,13 @@ function animateResult() {
 
     resultContainer.classList.remove('revealed');
 
+    // 复位上一轮的展示状态：缩略图模式会隐藏 emoji+店名容器，
+    // 不复位的话下一轮动画就在隐藏容器里跑，看起来像"动画没加载"
+    const resultContent = document.getElementById('result-content');
+    const mapLink = document.getElementById('result-map-link');
+    if (resultContent) resultContent.hidden = false;
+    if (mapLink) mapLink.hidden = true;
+
     const totalSteps = PREFERS_REDUCED_MOTION ? 1 : 24;
     let step = 0;
 
@@ -720,18 +560,76 @@ function animateResult() {
             return;
         }
 
-        const finalFood = getRandomFood();
-        lastResult = finalFood && finalFood.id ? finalFood : null;
-        emojiElement.textContent = finalFood.emoji;
-        resultElement.textContent = finalFood.name;
-        resultContainer.classList.add('revealed');
-        celebrate(resultContainer);
-        incrementTodayCount();
-        updateResultActions();
-        isAnimating = false;
+        try {
+            const finalFood = getRandomFood();
+            lastResult = finalFood && finalFood.id ? finalFood : null;
+            emojiElement.textContent = finalFood.emoji;
+            resultElement.textContent = finalFood.name;
+            resultContainer.classList.add('revealed');
+            celebrate(resultContainer);
+            incrementTodayCount();
+            updateResultActions();
+            updateResultMap(lastResult);
+        } finally {
+            // 无论展示环节出什么岔子，都不能把后续抽签锁死
+            isAnimating = false;
+        }
     };
 
     tick();
+}
+
+// 「再抽一次」：在结果屏原地重抽，不再把用户送回首页
+function redrawInPlace() {
+    if (isAnimating) return;
+    isAnimating = true;
+    animateResult();
+}
+
+let resultMapOptionId = null;
+
+// 结果方框：已定位的店以位置缩略图为主视觉（店名/地址做成图上的小卡片），
+// 未定位的店回退到 emoji + 店名展示
+function updateResultMap(option) {
+    const content = document.getElementById('result-content');
+    const addr = document.getElementById('result-address');
+    const link = document.getElementById('result-map-link');
+    const img = document.getElementById('result-map-img');
+    const mapName = document.getElementById('result-map-name');
+    const mapAddr = document.getElementById('result-map-addr');
+    if (!content || !addr || !link || !img || !mapName || !mapAddr) return;
+
+    resultMapOptionId = option && option.id ? option.id : null;
+    const address = option && option.address ? option.address : '';
+
+    const located = option && option.latitude != null && option.longitude != null;
+    if (!located) {
+        content.hidden = false;
+        addr.textContent = address ? `📍 ${address}` : '';
+        addr.hidden = !address;
+        link.hidden = true;
+        img.removeAttribute('src');
+        return;
+    }
+
+    mapName.textContent = `${option.emoji || ''} ${option.name}`.trim();
+    mapAddr.textContent = address || '📍 图中标记即店铺位置';
+    // 加载失败（服务未配置/配额超限/网络）时回退到 emoji + 店名，不阻碍抽签主流程
+    img.onerror = () => {
+        link.hidden = true;
+        content.hidden = false;
+        addr.textContent = address ? `📍 ${address}` : '';
+        addr.hidden = !address;
+    };
+    img.src = `${API_BASE}/options/${option.id}/staticmap`;
+    link.hidden = false;
+    content.hidden = true;
+}
+
+async function openResultOnMap() {
+    if (!resultMapOptionId) return;
+    switchScreen('map-screen');
+    if (window.HuliaMap) await window.HuliaMap.focus(resultMapOptionId);
 }
 
 // 结果页的次级动作：带密钥的设备才显示「从菜单下架」，其他人只有本机隐藏
@@ -774,7 +672,7 @@ async function delistCurrentResult() {
         lastResult = null;
         setExcludedIds(getExcludedIds().filter((id) => id !== removedId));
 
-        await Promise.all([loadOptions({ silent: true }), loadLists()]);
+        await loadOptions({ silent: true });
         switchScreen('start-screen');
         showManageMessage('该店铺已从菜单下架', 'success');
     } catch (error) {
@@ -796,19 +694,6 @@ function startAnimation() {
     setTimeout(() => {
         resultScreen.classList.add('active');
         animateResult();
-    }, 300);
-}
-
-function resetApp() {
-    if (isAnimating) return;
-
-    const startScreen = document.getElementById('start-screen');
-    const resultScreen = document.getElementById('result-screen');
-
-    resultScreen.classList.remove('active');
-
-    setTimeout(() => {
-        startScreen.classList.add('active');
     }, 300);
 }
 
@@ -835,7 +720,6 @@ function switchScreen(screenId) {
     if (screenId === 'manage-screen') {
         document.getElementById('manage-btn').classList.add('active');
         loadOptions({ silent: true });
-        loadLists();
         renderOptionsList();
     }
 
@@ -851,8 +735,6 @@ function validateOptionInput(name, emoji) {
     if (emoji.length > MAX_EMOJI_LENGTH) return `Emoji 不能超过 ${MAX_EMOJI_LENGTH} 个字符`;
     return null;
 }
-
-const MAX_ADDRESS_LENGTH = 200;
 
 // 从输入框收集可选地理信息；返回 { fields } 或 { error }。
 // 经纬度成对收，空串视为「没填」；清空一个留另一个直接报错
@@ -892,9 +774,27 @@ function collectGeoFields(addressInput, latInput, lngInput) {
     return { fields };
 }
 
+// 从输入框解析类型标签：逗号/顿号/空格分隔；返回 { tags } 或 { error }
+function parseTagsInput(text) {
+    const tags = [];
+    const seen = new Set();
+    for (const part of (text || '').split(/[,，、;；\s]+/)) {
+        const tag = part.trim();
+        if (!tag) continue;
+        if (tag.length > MAX_TAG_LENGTH) return { error: `单个标签不能超过 ${MAX_TAG_LENGTH} 个字（「${tag}」）` };
+        const key = tag.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        tags.push(tag);
+    }
+    if (tags.length > MAX_TAGS_COUNT) return { error: `标签最多 ${MAX_TAGS_COUNT} 个` };
+    return { tags };
+}
+
 async function addFoodOption() {
     const nameInput = document.getElementById('food-name');
     const emojiInput = document.getElementById('food-emoji');
+    const tagsInput = document.getElementById('food-tags');
     const addressInput = document.getElementById('food-address');
     const latInput = document.getElementById('food-lat');
     const lngInput = document.getElementById('food-lng');
@@ -915,29 +815,33 @@ async function addFoodOption() {
         return;
     }
 
+    const parsedTags = parseTagsInput(tagsInput ? tagsInput.value : '');
+    if (parsedTags.error) {
+        showManageMessage(parsedTags.error, 'error');
+        return;
+    }
+
     addBtn.disabled = true;
 
     try {
-        const payload = { name, emoji, ...geo.fields };
+        const payload = { name, emoji, tags: parsedTags.tags, ...geo.fields };
         const newOption = await requestJson(`${API_BASE}/options`, {
             method: 'POST',
             admin: true,
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(
-                selectedListId === ALL_LISTS_ID
-                    ? payload
-                    : { ...payload, listIds: [Number(selectedListId)] }
-            )
+            body: JSON.stringify(payload)
         });
 
         foodOptions.push(newOption);
         updateStats();
+        renderTagChips();
         renderOptionsList();
 
         nameInput.value = '';
         emojiInput.value = '';
+        if (tagsInput) tagsInput.value = '';
         if (addressInput) addressInput.value = '';
         if (latInput) latInput.value = '';
         if (lngInput) lngInput.value = '';
@@ -990,6 +894,7 @@ function cancelEditingOption() {
 async function saveEditingOption(id) {
     const nameInput = document.getElementById(`edit-name-${id}`);
     const emojiInput = document.getElementById(`edit-emoji-${id}`);
+    const tagsInput = document.getElementById(`edit-tags-${id}`);
     const addressInput = document.getElementById(`edit-address-${id}`);
     const latInput = document.getElementById(`edit-lat-${id}`);
     const lngInput = document.getElementById(`edit-lng-${id}`);
@@ -1011,6 +916,12 @@ async function saveEditingOption(id) {
         return;
     }
 
+    const tags = parseTagsInput(tagsInput ? tagsInput.value : '');
+    if (tags.error) {
+        showManageMessage(tags.error, 'error');
+        return;
+    }
+
     try {
         const updatedOption = await requestJson(`${API_BASE}/options/${id}`, {
             method: 'PATCH',
@@ -1018,12 +929,13 @@ async function saveEditingOption(id) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ name, emoji, ...geo.fields })
+            body: JSON.stringify({ name, emoji, tags: tags.tags, ...geo.fields })
         });
 
         foodOptions = foodOptions.map((option) => (option.id === id ? updatedOption : option));
         editingOptionId = null;
         updateStats();
+        renderTagChips();
         renderOptionsList();
         showManageMessage('选项更新成功', 'success');
     } catch (error) {
@@ -1060,14 +972,14 @@ function createOptionView(option) {
     content.appendChild(emoji);
     content.appendChild(name);
 
-    // 所属榜单标签
-    const tags = document.createElement('span');
-    tags.className = 'option-tags';
-    (option.lists || []).forEach((list) => {
-        const tag = document.createElement('span');
-        tag.className = 'option-tag';
-        tag.textContent = list.name;
-        tags.appendChild(tag);
+    // 类型标签
+    const tagsSpan = document.createElement('span');
+    tagsSpan.className = 'option-tags';
+    (option.tags || []).forEach((tag) => {
+        const tagEl = document.createElement('span');
+        tagEl.className = 'option-tag';
+        tagEl.textContent = tag;
+        tagsSpan.appendChild(tagEl);
     });
 
     // 已定位的店给一个 📍 标，方便知道哪些会上地图
@@ -1076,26 +988,20 @@ function createOptionView(option) {
         geoTag.className = 'option-tag option-tag-geo';
         geoTag.title = option.address || `${option.latitude}, ${option.longitude}`;
         geoTag.textContent = '📍';
-        tags.appendChild(geoTag);
+        tagsSpan.appendChild(geoTag);
     }
 
     if (getExcludedIds().includes(String(option.id))) {
         const hiddenTag = document.createElement('span');
         hiddenTag.className = 'option-tag option-tag-hidden';
         hiddenTag.textContent = '本机已隐藏';
-        tags.appendChild(hiddenTag);
+        tagsSpan.appendChild(hiddenTag);
     }
 
-    content.appendChild(tags);
+    content.appendChild(tagsSpan);
 
     const actions = document.createElement('div');
     actions.className = 'option-actions';
-
-    const activeList = currentList();
-
-    if (activeList && (option.lists || []).some((list) => String(list.id) === String(activeList.id))) {
-        actions.appendChild(createButton('移出本榜', 'option-btn quiet', () => removeOptionFromList(option, activeList.id)));
-    }
 
     actions.appendChild(createButton('编辑', 'option-btn edit', () => startEditingOption(option.id)));
     actions.appendChild(createButton('删除', 'option-btn delete', () => deleteFoodOption(option.id)));
@@ -1128,6 +1034,14 @@ function createOptionEditView(option) {
     nameInput.maxLength = MAX_NAME_LENGTH;
     nameInput.value = option.name;
     nameInput.placeholder = '餐饮名称';
+
+    // 类型标签：预填现值，逗号分隔；清空保存即清除
+    const tagsInput = document.createElement('input');
+    tagsInput.className = 'option-input option-tags-input';
+    tagsInput.id = `edit-tags-${option.id}`;
+    tagsInput.type = 'text';
+    tagsInput.value = (option.tags || []).join('、');
+    tagsInput.placeholder = '类型标签（顿号分隔，清空即删除）';
 
     // 地理信息：预填现值，改了就更新，清空保存即清除
     const geoRow = document.createElement('div');
@@ -1178,6 +1092,7 @@ function createOptionEditView(option) {
 
     editForm.appendChild(emojiInput);
     editForm.appendChild(nameInput);
+    editForm.appendChild(tagsInput);
     editForm.appendChild(geoRow);
 
     optionItem.appendChild(editForm);
@@ -1192,9 +1107,9 @@ function renderOptionsList() {
 
     container.innerHTML = '';
 
-    const visible = selectedListId === ALL_LISTS_ID
-        ? foodOptions
-        : foodOptions.filter((option) => (option.lists || []).some((list) => String(list.id) === String(selectedListId)));
+    const visible = selectedTag
+        ? foodOptions.filter((option) => (option.tags || []).includes(selectedTag))
+        : foodOptions;
 
     if (!foodOptions.length) {
         const emptyState = document.createElement('p');
@@ -1207,7 +1122,7 @@ function renderOptionsList() {
     if (!visible.length) {
         const emptyState = document.createElement('p');
         emptyState.className = 'options-empty';
-        emptyState.textContent = `「${(currentList() || {}).name || '该榜单'}」里还没有店铺，可在「榜单管理」里加入`;
+        emptyState.textContent = `「${tagChipLabel(selectedTag)}」里还没有店铺，可在下方编辑里给店铺加上「${selectedTag}」标签`;
         container.appendChild(emptyState);
         return;
     }
@@ -1259,7 +1174,6 @@ function createFloatingEmojis() {
 
 document.addEventListener('DOMContentLoaded', () => {
     loadOptions();
-    loadLists();
     createFloatingEmojis();
 
     // PWA：只在安全上下文注册（localhost / HTTPS）；失败静默，不影响普通使用
@@ -1280,7 +1194,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const addBtn = document.getElementById('add-btn');
 
     startBtn.addEventListener('click', startAnimation);
-    retryBtn.addEventListener('click', resetApp);
+    retryBtn.addEventListener('click', redrawInPlace);
     backHomeBtn.addEventListener('click', () => switchScreen('start-screen'));
     homeBtn.addEventListener('click', () => switchScreen('start-screen'));
     if (mapBtn) mapBtn.addEventListener('click', () => switchScreen('map-screen'));
@@ -1302,13 +1216,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const skipBtn = document.getElementById('skip-btn');
     const delistBtn = document.getElementById('delist-btn');
-    const createListBtn = document.getElementById('create-list-btn');
-    const membershipAddBtn = document.getElementById('membership-add-btn');
+    const resultMapLink = document.getElementById('result-map-link');
 
     if (skipBtn) skipBtn.addEventListener('click', skipCurrentResult);
     if (delistBtn) delistBtn.addEventListener('click', delistCurrentResult);
-    if (createListBtn) createListBtn.addEventListener('click', createList);
-    if (membershipAddBtn) membershipAddBtn.addEventListener('click', addOptionToCurrentList);
+    if (resultMapLink) resultMapLink.addEventListener('click', openResultOnMap);
 
     const tokenSetBtn = document.getElementById('token-set-btn');
     const tokenClearBtn = document.getElementById('token-clear-btn');
@@ -1352,7 +1264,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     retryBtn.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
-            resetApp();
+            redrawInPlace();
         }
     });
 });

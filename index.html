@@ -79,7 +79,16 @@
                         <div id="result-content" class="result-content">
                             <span id="emoji" class="emoji">🍽️</span>
                             <h2 id="food-result" class="food-result"></h2>
+                            <p id="result-address" class="result-address" hidden></p>
                         </div>
+                        <button id="result-map-link" class="result-map-link" type="button" hidden>
+                            <img id="result-map-img" alt="店铺位置缩略图">
+                            <span class="result-map-card">
+                                <span id="result-map-name" class="result-map-name"></span>
+                                <span id="result-map-addr" class="result-map-addr"></span>
+                            </span>
+                            <span class="result-map-hint">📍 在地图中查看</span>
+                        </button>
                     </div>
                     <div class="result-actions">
                         <button id="retry-btn" class="secondary-btn">再抽一次</button>
@@ -97,7 +106,7 @@
                     <div class="map-header">
                         <h2 class="manage-title">店铺地图</h2>
                         <p class="manage-subtitle">已定位 <span id="map-located-count">0</span> 家 · 点标记看详情</p>
-                        <div id="map-list-chips" class="list-chips" role="tablist" aria-label="筛选地图上的榜单"></div>
+                        <div id="map-list-chips" class="list-chips" role="tablist" aria-label="按类型筛选地图"></div>
                     </div>
                     <div id="map-container" class="map-container">
                         <div id="map-placeholder" class="map-placeholder" hidden>地图加载中…</div>
@@ -117,27 +126,8 @@
                         </div>
                     </div>
 
-                    <!-- 管理页的榜单切换：决定列表显示范围与新增店铺的归属 -->
-                    <div id="manage-list-chips" class="list-chips" role="tablist" aria-label="选择要管理的榜单"></div>
-
-                    <details class="import-panel">
-                        <summary class="import-toggle">
-                            <span class="import-toggle-text">🏷️ 榜单管理（建榜 / 改名 / 删除 / 移店）</span>
-                            <span class="import-caret" aria-hidden="true"></span>
-                        </summary>
-                        <div class="import-body">
-                            <p class="import-hint">一家店可以同时属于多个榜单。删除榜单只解除关联，不会删掉店铺本身。</p>
-                            <div class="list-new-row">
-                                <input type="text" id="new-list-name" class="list-new-input" placeholder="新榜单名称，例如：请客榜">
-                                <button id="create-list-btn" type="button" class="soft-btn">新建榜单</button>
-                            </div>
-                            <div id="lists-container" class="lists-container"></div>
-                            <div class="list-membership-row" id="membership-row" hidden>
-                                <select id="membership-select" class="membership-select" aria-label="选择要加入当前榜单的店铺"></select>
-                                <button id="membership-add-btn" type="button" class="soft-btn">加入当前榜单</button>
-                            </div>
-                        </div>
-                    </details>
+                    <!-- 管理页的筛选：与首页共用同一个类型标签 -->
+                    <div id="manage-list-chips" class="list-chips" role="tablist" aria-label="选择要管理的类型"></div>
 
                     <div class="add-option-form">
                         <div class="form-group">
@@ -147,6 +137,10 @@
                         <div class="form-group">
                             <label for="food-emoji">Emoji 图标</label>
                             <input type="text" id="food-emoji" placeholder="例如：🌶️、🍲、🍕">
+                        </div>
+                        <div class="form-group">
+                            <label for="food-tags">类型标签（可选）</label>
+                            <input type="text" id="food-tags" maxlength="60" placeholder="逗号或顿号分隔，例如：火锅, 夜宵 · 最多 6 个，每个 ≤ 12 字">
                         </div>
                         <details class="import-panel geo-panel">
                             <summary class="import-toggle">

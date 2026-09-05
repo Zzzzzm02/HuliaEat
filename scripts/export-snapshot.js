@@ -58,38 +58,26 @@ const pool = new Pool({
 });
 
 async function main() {
-    const lists = await pool.query(`
-        SELECT id, name, sort_order AS "sortOrder"
-        FROM lists ORDER BY sort_order ASC, id ASC
-    `);
-
     const options = await pool.query(`
-        SELECT o.id, o.name, o.emoji, o.latitude, o.longitude, o.address,
-               COALESCE(
-                   array_agg(l.name ORDER BY l.sort_order, l.id)
-                   FILTER (WHERE l.id IS NOT NULL), '{}'
-               ) AS lists
+        SELECT o.name, o.emoji, o.latitude, o.longitude, o.address, o.tags
         FROM food_options o
-        LEFT JOIN list_items li ON li.option_id = o.id
-        LEFT JOIN lists l ON l.id = li.list_id
-        GROUP BY o.id
         ORDER BY o.id ASC
     `);
 
-    const orphanCount = options.rows.filter((row) => row.lists.length === 0).length;
-
     const document = {
-        version: 2,
+        version: 3,
         exportedAt: new Date().toISOString(),
-        lists: lists.rows.map((row) => ({ name: row.name, sortOrder: Number(row.sortOrder) })),
         options: options.rows.map((row) => {
             const option = {
                 name: row.name,
-                emoji: row.emoji,
-                lists: row.lists.length ? row.lists : ['默认榜单']
+                emoji: row.emoji
             };
 
-            // 已定位的店把地理信息一起带走；没定位的省略这几个键，保持快照干净
+            // 类型标签：有才写，保持快照干净
+            if (row.tags && row.tags.length) {
+                option.tags = row.tags;
+            }
+            // 已定位的店把地理信息一起带走；没定位的省略这几个键
             if (row.latitude !== null && row.longitude !== null) {
                 option.latitude = row.latitude;
                 option.longitude = row.longitude;
@@ -102,25 +90,19 @@ async function main() {
         })
     };
 
-    // 保证快照里声明过的榜单都被 seed 认可：孤儿行会被挂到默认榜单，
-    // 因此默认榜单必须存在于 lists 声明中
-    if (!document.lists.some((list) => list.name === '默认榜单')) {
-        document.lists.push({ name: '默认榜单', sortOrder: 999 });
-    }
-
     fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
     fs.writeFileSync(OUT_FILE, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
 
     console.log(`已导出快照 → ${path.relative(ROOT, OUT_FILE)}`);
-    console.log(`  榜单 ${document.lists.length} 个，餐厅 ${document.options.length} 家`);
-
-    if (orphanCount > 0) {
-        console.warn(`  ⚠️  有 ${orphanCount} 家店不属于任何榜单，已在快照中挂到「默认榜单」。`);
-    }
+    console.log(`  餐厅 ${document.options.length} 家`);
 
     const missingEmoji = document.options.filter((row) => row.emoji === '🍽️').length;
     if (missingEmoji > 0) {
         console.warn(`  ⚠️  仍有 ${missingEmoji} 家使用通用占位 🍽️。`);
+    }
+    const noTags = document.options.filter((row) => !(row.tags && row.tags.length)).length;
+    if (noTags > 0) {
+        console.warn(`  ⚠️  有 ${noTags} 家还没有任何类型标签，不会出现在「今天想吃X」筛选里。`);
     }
 }
 

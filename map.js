@@ -1,8 +1,8 @@
 /*
  * 地图屏：高德 JSAPI 2.0 动态加载 + emoji 标注点。
  *
- * 数据与筛选直接读 script.js 的全局状态（foodOptions / lists / selectedListId /
- * ALL_LISTS_ID —— 经典脚本顶层的 let 在全局词法作用域里互通），本文件只读不写。
+ * 数据与筛选直接读 script.js 的全局状态（foodOptions / selectedTag —— 经典脚本
+ * 顶层的 let 在全局词法作用域里互通），本文件只读不写。
  * 高德 SDK 按需加载：只有第一次切到地图屏才会拉取，不影响首页打开速度。
  * 未配置 key（GET /api/config 返回 null）时显示配置指引，其余功能不受影响。
  */
@@ -85,10 +85,9 @@
 
     // 与 getPool 同源但不受「本机排除」影响：地图是看全貌，不是抽签
     function visibleOptions() {
-        return selectedListId === ALL_LISTS_ID
-            ? foodOptions
-            : foodOptions.filter((option) => (option.lists || [])
-                .some((list) => String(list.id) === String(selectedListId)));
+        return selectedTag
+            ? foodOptions.filter((option) => (option.tags || []).includes(selectedTag))
+            : foodOptions;
     }
 
     function createPin(option) {
@@ -100,8 +99,8 @@
     }
 
     function openPopup(option, marker) {
-        const listsHtml = (option.lists || [])
-            .map((list) => `<span class="map-popup-tag">${escapeHtml(list.name)}</span>`)
+        const tagsHtml = (option.tags || [])
+            .map((tag) => `<span class="map-popup-tag">${escapeHtml(tag)}</span>`)
             .join('');
         infoWindow.setContent(`
             <div class="map-popup">
@@ -110,7 +109,7 @@
                     <strong>${escapeHtml(option.name)}</strong>
                 </div>
                 ${option.address ? `<div class="map-popup-address">📍 ${escapeHtml(option.address)}</div>` : ''}
-                ${listsHtml ? `<div class="map-popup-tags">${listsHtml}</div>` : ''}
+                ${tagsHtml ? `<div class="map-popup-tags">${tagsHtml}</div>` : ''}
             </div>
         `);
         infoWindow.open(map, marker.getPosition());
@@ -157,6 +156,7 @@
                 anchor: 'bottom-center',
                 title: option.name
             });
+            marker._optionId = option.id; // 结果页「在地图中查看」按 id 定位标记
             marker.on('click', () => openPopup(option, marker));
             markers.push(marker);
             map.add(marker);
@@ -212,8 +212,24 @@
         drawMarkers();
     }
 
+    // 从结果页跳转过来：切到该店的位置并弹出气泡。
+    // 店不在当前筛选里时至少把中心移过去（此时没有标记可弹）
+    async function focus(optionId) {
+        await render();
+        if (!map) return false;
+
+        const option = foodOptions.find((o) => String(o.id) === String(optionId));
+        if (!option || option.latitude == null || option.longitude == null) return false;
+
+        map.setZoomAndCenter(16, [option.longitude, option.latitude]);
+        const marker = markers.find((m) => String(m._optionId) === String(optionId));
+        if (marker) openPopup(option, marker);
+        return true;
+    }
+
     window.HuliaMap = {
         render,
+        focus,
         // 榜单筛选或数据变化后的重绘；地图还没初始化时静默跳过
         refresh() {
             if (map) drawMarkers();

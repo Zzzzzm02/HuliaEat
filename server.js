@@ -42,6 +42,8 @@ const SEED_FILE = process.env.SEED_FILE || path.join(__dirname, 'data', 'options
 const MAX_NAME_LENGTH = 40;
 const MAX_EMOJI_LENGTH = 8;
 const MAX_ADDRESS_LENGTH = 200;
+const MAX_TAG_LENGTH = 12;
+const MAX_TAGS_COUNT = 6;
 
 /* ---------------- 安全相关配置 ---------------- */
 
@@ -49,9 +51,11 @@ const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const ADMIN_TOKEN = (process.env.ADMIN_TOKEN || '').trim();
 
 // 高德地图：JSAPI key 随 GET /api/config 下发（它本来就是设计给浏览器用的公开值，
-// 建议在高德控制台给 key 配域名白名单）；AMAP_WEB_KEY 只给 scripts/geocode-options.js 用
+// 建议在高德控制台给 key 配域名白名单）；AMAP_WEB_KEY 只在服务端用——批量地理编码
+// 脚本和下面的静态缩略图代理，都不下发给前端
 const AMAP_JSAPI_KEY = (process.env.AMAP_JSAPI_KEY || '').trim();
 const AMAP_SECURITY_CODE = (process.env.AMAP_SECURITY_CODE || '').trim();
+const AMAP_WEB_KEY = (process.env.AMAP_WEB_KEY || '').trim();
 
 // 跨域写操作白名单：逗号分隔的 Origin，例如 "https://admin.example.com,https://fox.example.com"
 const CORS_ALLOWED_ORIGINS = new Set(
@@ -346,7 +350,27 @@ function normalizeSeedOption(option) {
         result.address = address;
     }
 
+    const tags = normalizeTagArray(option.tags);
+    if (tags.length) {
+        result.tags = tags;
+    }
+
     return result;
+}
+
+// 宽松解析（种子/快照用）：只留合法的短字符串标签，其余静默丢弃
+function normalizeTagArray(rawTags) {
+    if (!Array.isArray(rawTags)) return [];
+    const seen = new Set();
+    const tags = [];
+    for (const raw of rawTags) {
+        const tag = normalizeText(raw);
+        if (!tag || tag.length > MAX_TAG_LENGTH || seen.has(tag)) continue;
+        seen.add(tag);
+        tags.push(tag);
+        if (tags.length >= MAX_TAGS_COUNT) break;
+    }
+    return tags;
 }
 
 // 宽松解析（种子/快照用）：不是合法数字或越界就返回 null，静默丢弃
@@ -381,13 +405,14 @@ function validatePayload(payload, { partial = false } = {}) {
     const hasLatitude = Object.prototype.hasOwnProperty.call(payload, 'latitude');
     const hasLongitude = Object.prototype.hasOwnProperty.call(payload, 'longitude');
     const hasAddress = Object.prototype.hasOwnProperty.call(payload, 'address');
+    const hasTags = Object.prototype.hasOwnProperty.call(payload, 'tags');
 
     if (!partial && (!hasName || !hasEmoji)) {
         return { ok: false, error: 'name 和 emoji 都是必填项' };
     }
 
-    if (partial && !hasName && !hasEmoji && !hasLatitude && !hasLongitude && !hasAddress) {
-        return { ok: false, error: '至少提供一个可修改字段（name / emoji / latitude / longitude / address）' };
+    if (partial && !hasName && !hasEmoji && !hasLatitude && !hasLongitude && !hasAddress && !hasTags) {
+        return { ok: false, error: '至少提供一个可修改字段（name / emoji / latitude / longitude / address / tags）' };
     }
 
     const result = {};
@@ -429,6 +454,26 @@ function validatePayload(payload, { partial = false } = {}) {
             return { ok: false, error: `address 最长不能超过 ${MAX_ADDRESS_LENGTH} 个字符` };
         }
         result.address = address || null;
+    }
+
+    // 类型标签严格校验：必须是字符串数组，自动去空去重；空数组 = 清除全部标签。
+    // 请求里给了就不静默修正错误项（超长/超量直接 400），与坐标同一套"填了就必须合法"的哲学
+    if (hasTags) {
+        if (!Array.isArray(payload.tags)) {
+            return { ok: false, error: 'tags 必须是字符串数组' };
+        }
+        for (const raw of payload.tags) {
+            if (typeof raw !== 'string' || !normalizeText(raw)) {
+                return { ok: false, error: 'tags 里的每一项都必须是非空字符串' };
+            }
+            if (normalizeText(raw).length > MAX_TAG_LENGTH) {
+                return { ok: false, error: `单个标签最长不能超过 ${MAX_TAG_LENGTH} 个字符` };
+            }
+        }
+        if (payload.tags.length > MAX_TAGS_COUNT) {
+            return { ok: false, error: `tags 最多 ${MAX_TAGS_COUNT} 个` };
+        }
+        result.tags = normalizeTagArray(payload.tags);
     }
 
     // POST/PUT 没有现值可配对：经纬度必须成对出现
@@ -496,11 +541,28 @@ function normalizeImportItem(item) {
         result.address = address || null;
     }
 
+    if (hasOwn.call(item, 'tags')) {
+        if (!Array.isArray(item.tags)) {
+            return { error: `「${name}」的 tags 必须是字符串数组` };
+        }
+        for (const raw of item.tags) {
+            if (typeof raw !== 'string' || !normalizeText(raw)) {
+                return { error: `「${name}」的 tags 每一项都必须是非空字符串` };
+            }
+            if (normalizeText(raw).length > MAX_TAG_LENGTH) {
+                return { error: `「${name}」的单个标签超过 ${MAX_TAG_LENGTH} 个字符` };
+            }
+        }
+        if (item.tags.length > MAX_TAGS_COUNT) {
+            return { error: `「${name}」的 tags 超过 ${MAX_TAGS_COUNT} 个` };
+        }
+        result.tags = normalizeTagArray(item.tags);
+    }
+
     return result;
 }
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
-const DEFAULT_LIST_NAME = '默认榜单';
 
 /* ---------------- 迁移：migrations/NNN_*.sql 按序执行 ---------------- */
 
@@ -546,34 +608,21 @@ async function runMigrations() {
     }
 }
 
-/* ---------------- 种子：支持 v1 裸数组与 v2 多榜单两种格式 ---------------- */
+/* ---------------- 种子：兼容 v1 裸数组 / v2 多榜单 / v3 类型标签 ---------------- */
 
 function normalizeSeedDocument(parsed) {
-    // v1：[{ name, emoji }, ...] —— 全部落到默认榜单
+    // v1：[{ name, emoji }, ...]
     if (Array.isArray(parsed)) {
-        const options = dedupeByName(parsed.map(normalizeSeedOption).filter(Boolean))
-            .map((option) => ({ ...option, lists: [] }));
-
-        return { lists: [], options };
+        const options = dedupeByName(parsed.map(normalizeSeedOption).filter(Boolean));
+        return { options };
     }
 
-    // v2：{ version: 2, lists: [{ name, sortOrder }], options: [{ name, emoji, lists: [榜单名] }] }
+    // v2：{ version: 2, lists: [...], options: [{ name, emoji, lists: [榜单名] }] }
+    // v3：{ version: 3, options: [{ name, emoji, tags: [标签] , ...地理 }] }
+    // v2 的 lists 声明已随榜单体系退役，这里只取 options（v2 的 lists 成员关系
+    // 已由 005 迁移在数据库里转成标签，不再从种子回放）
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.options)) {
-        throw new Error('种子文件格式错误：应为数组，或 { version, lists, options } 对象');
-    }
-
-    const seenLists = new Set();
-    const lists = [];
-
-    for (const [index, item] of (Array.isArray(parsed.lists) ? parsed.lists : []).entries()) {
-        const name = normalizeText(item && item.name);
-        if (!name || name.length > MAX_NAME_LENGTH) continue;
-
-        const key = name.toLowerCase();
-        if (seenLists.has(key)) continue;
-
-        seenLists.add(key);
-        lists.push({ name, sortOrder: Number(item.sortOrder) || index + 1 });
+        throw new Error('种子文件格式错误：应为数组，或含 options 数组的对象');
     }
 
     const merged = new Map();
@@ -583,17 +632,14 @@ function normalizeSeedDocument(parsed) {
         if (!option) continue;
 
         const key = option.name.toLowerCase();
-        const wanted = Array.isArray(raw.lists)
-            ? raw.lists.map(normalizeText).filter((name) => seenLists.has(name.toLowerCase()))
-            : [];
-
         if (!merged.has(key)) {
-            merged.set(key, { ...option, lists: wanted });
+            merged.set(key, option);
             continue;
         }
 
+        // 重名行合并：以先出现的为准，标签取并集
         const existing = merged.get(key);
-        existing.lists = [...new Set([...existing.lists, ...wanted])];
+        existing.tags = normalizeTagArray([...(existing.tags || []), ...(option.tags || [])]);
     }
 
     const options = [...merged.values()];
@@ -602,7 +648,7 @@ function normalizeSeedDocument(parsed) {
         throw new Error('种子文件没有有效数据');
     }
 
-    return { lists, options };
+    return { options };
 }
 
 async function loadSeedDocument() {
@@ -613,17 +659,6 @@ async function loadSeedDocument() {
         console.warn(`读取种子文件失败，将回退默认菜单。原因: ${error.message}`);
         return normalizeSeedDocument([...DEFAULT_OPTIONS]);
     }
-}
-
-async function ensureDefaultList(client) {
-    const existing = await client.query('SELECT id FROM lists WHERE LOWER(name) = $1', [DEFAULT_LIST_NAME.toLowerCase()]);
-    if (existing.rowCount > 0) return existing.rows[0].id;
-
-    const created = await client.query(
-        'INSERT INTO lists(name, sort_order) VALUES ($1, $2) RETURNING id',
-        [DEFAULT_LIST_NAME, 999]
-    );
-    return created.rows[0].id;
 }
 
 async function seedIfEmpty() {
@@ -639,39 +674,19 @@ async function seedIfEmpty() {
         await client.query('BEGIN');
         inTransaction = true;
 
-        const defaultListId = await ensureDefaultList(client);
-
-        // 先建榜单，记下 名称 → id
-        const listIds = new Map();
-        for (const list of seed.lists) {
-            const result = await client.query(
-                `INSERT INTO lists(name, sort_order) VALUES ($1, $2)
-                 ON CONFLICT (LOWER(name)) DO UPDATE SET sort_order = EXCLUDED.sort_order
-                 RETURNING id`,
-                [list.name, list.sortOrder]
-            );
-            listIds.set(list.name.toLowerCase(), result.rows[0].id);
-        }
-
-        // 再插店，并按声明挂进榜单（未声明的进默认榜单）
         for (const option of seed.options) {
-            const inserted = await client.query(
-                `INSERT INTO food_options(name, emoji, latitude, longitude, address)
-                 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-                [option.name, option.emoji, option.latitude ?? null, option.longitude ?? null, option.address ?? null]
+            await client.query(
+                `INSERT INTO food_options(name, emoji, latitude, longitude, address, tags)
+                 VALUES ($1, $2, $3, $4, $5, $6)`,
+                [
+                    option.name,
+                    option.emoji,
+                    option.latitude ?? null,
+                    option.longitude ?? null,
+                    option.address ?? null,
+                    option.tags ?? []
+                ]
             );
-            const optionId = inserted.rows[0].id;
-
-            const targets = option.lists.length
-                ? option.lists.map((name) => listIds.get(name.toLowerCase())).filter(Boolean)
-                : [defaultListId];
-
-            for (const listId of new Set(targets)) {
-                await client.query(
-                    'INSERT INTO list_items(list_id, option_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-                    [listId, optionId]
-                );
-            }
         }
 
         await client.query('COMMIT');
@@ -747,240 +762,31 @@ app.get('/api/config', (req, res) => {
 });
 
 const OPTIONS_SELECT = `
-    SELECT o.id, o.name, o.emoji, o.latitude, o.longitude, o.address,
-           COALESCE(
-               json_agg(json_build_object('id', l.id, 'name', l.name)
-                        ORDER BY l.sort_order, l.id)
-               FILTER (WHERE l.id IS NOT NULL),
-               '[]'
-           ) AS lists
+    SELECT o.id, o.name, o.emoji, o.latitude, o.longitude, o.address, o.tags
     FROM food_options o
-    LEFT JOIN list_items li ON li.option_id = o.id
-    LEFT JOIN lists l ON l.id = li.list_id
 `;
 
 app.get('/api/options', async (req, res, next) => {
     try {
-        const listId = parseId(req.query.list);
-
-        // ?list=<非法值> 应当是 400，而不是静默返回全量
-        if (req.query.list !== undefined && !listId) {
-            return res.status(400).json({ error: '无效的榜单 ID' });
-        }
+        const tag = normalizeText(req.query.tag);
 
         const params = [];
         let where = '';
 
-        if (listId) {
-            where = 'WHERE EXISTS (SELECT 1 FROM list_items f WHERE f.option_id = o.id AND f.list_id = $1)';
-            params.push(listId);
+        if (tag) {
+            where = 'WHERE $1 = ANY(o.tags)';
+            params.push(tag);
         }
 
         const result = await pool.query(
             `${OPTIONS_SELECT}
              ${where}
-             GROUP BY o.id
              ORDER BY o.id ASC`,
             params
         );
 
         return res.json(result.rows);
     } catch (error) {
-        return next(error);
-    }
-});
-
-app.get('/api/lists', async (req, res, next) => {
-    try {
-        const result = await pool.query(`
-            SELECT l.id, l.name, l.sort_order AS "sortOrder",
-                   COUNT(li.option_id)::int AS count
-            FROM lists l
-            LEFT JOIN list_items li ON li.list_id = l.id
-            GROUP BY l.id
-            ORDER BY l.sort_order ASC, l.id ASC
-        `);
-
-        res.json(result.rows);
-    } catch (error) {
-        next(error);
-    }
-});
-
-function validateListPayload(payload, { partial = false } = {}) {
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-        return { ok: false, error: '请求体必须是 JSON 对象' };
-    }
-
-    const hasName = Object.prototype.hasOwnProperty.call(payload, 'name');
-    const hasOrder = Object.prototype.hasOwnProperty.call(payload, 'sortOrder');
-
-    if (!partial && !hasName) return { ok: false, error: 'name 是必填项' };
-    if (partial && !hasName && !hasOrder) return { ok: false, error: '至少提供 name 或 sortOrder' };
-
-    const data = {};
-
-    if (hasName) {
-        const name = normalizeText(payload.name);
-        if (!name) return { ok: false, error: '榜单名称不能为空' };
-        if (name.length > MAX_NAME_LENGTH) {
-            return { ok: false, error: `榜单名称最长不能超过 ${MAX_NAME_LENGTH} 个字符` };
-        }
-        data.name = name;
-    }
-
-    if (hasOrder) {
-        const sortOrder = Number(payload.sortOrder);
-        if (!Number.isInteger(sortOrder)) return { ok: false, error: 'sortOrder 必须是整数' };
-        data.sortOrder = sortOrder;
-    }
-
-    return { ok: true, data };
-}
-
-app.post('/api/lists', requireAdmin, async (req, res, next) => {
-    try {
-        const validation = validateListPayload(req.body);
-        if (!validation.ok) {
-            return res.status(400).json({ error: validation.error });
-        }
-
-        const maxOrder = await pool.query('SELECT COALESCE(MAX(sort_order), 0)::int AS max FROM lists');
-        const result = await pool.query(
-            'INSERT INTO lists(name, sort_order) VALUES ($1, $2) RETURNING id, name, sort_order AS "sortOrder"',
-            [validation.data.name, maxOrder.rows[0].max + 1]
-        );
-
-        return res.status(201).json({ ...result.rows[0], count: 0 });
-    } catch (error) {
-        if (error.code === '23505') {
-            return res.status(409).json({ error: '已存在同名榜单' });
-        }
-        return next(error);
-    }
-});
-
-app.patch('/api/lists/:id', requireAdmin, async (req, res, next) => {
-    try {
-        const id = parseId(req.params.id);
-        if (!id) {
-            return res.status(400).json({ error: '无效的榜单 ID' });
-        }
-
-        const validation = validateListPayload(req.body, { partial: true });
-        if (!validation.ok) {
-            return res.status(400).json({ error: validation.error });
-        }
-
-        const current = await pool.query('SELECT id, name, sort_order FROM lists WHERE id = $1', [id]);
-        if (current.rowCount === 0) {
-            return res.status(404).json({ error: '榜单不存在' });
-        }
-
-        const nextName = validation.data.name ?? current.rows[0].name;
-        const nextOrder = validation.data.sortOrder ?? current.rows[0].sort_order;
-
-        const result = await pool.query(
-            `UPDATE lists SET name = $1, sort_order = $2, updated_at = NOW()
-             WHERE id = $3 RETURNING id, name, sort_order AS "sortOrder"`,
-            [nextName, nextOrder, id]
-        );
-
-        const count = await pool.query('SELECT COUNT(*)::int AS count FROM list_items WHERE list_id = $1', [id]);
-        return res.json({ ...result.rows[0], count: count.rows[0].count });
-    } catch (error) {
-        if (error.code === '23505') {
-            return res.status(409).json({ error: '已存在同名榜单' });
-        }
-        return next(error);
-    }
-});
-
-// 删除榜单只解除关联，店本身保留（下架一家店请走 DELETE /api/options/:id）
-app.delete('/api/lists/:id', requireAdmin, async (req, res, next) => {
-    try {
-        const id = parseId(req.params.id);
-        if (!id) {
-            return res.status(400).json({ error: '无效的榜单 ID' });
-        }
-
-        const result = await pool.query('DELETE FROM lists WHERE id = $1', [id]);
-        if (result.rowCount === 0) {
-            return res.status(404).json({ error: '榜单不存在' });
-        }
-
-        return res.status(204).send();
-    } catch (error) {
-        return next(error);
-    }
-});
-
-//  membership 变更：{ optionIds: [1,2,3], mode: 'add' | 'remove' | 'replace' }
-app.post('/api/lists/:id/membership', requireAdmin, async (req, res, next) => {
-    try {
-        const listId = parseId(req.params.id);
-        if (!listId) {
-            return res.status(400).json({ error: '无效的榜单 ID' });
-        }
-
-        const listExists = await pool.query('SELECT id FROM lists WHERE id = $1', [listId]);
-        if (listExists.rowCount === 0) {
-            return res.status(404).json({ error: '榜单不存在' });
-        }
-
-        const body = req.body || {};
-        const mode = ['add', 'remove', 'replace'].includes(body.mode) ? body.mode : '';
-        if (!mode) {
-            return res.status(400).json({ error: "mode 必须是 'add' / 'remove' / 'replace'" });
-        }
-
-        if (!Array.isArray(body.optionIds)) {
-            return res.status(400).json({ error: 'optionIds 必须是数组' });
-        }
-
-        const optionIds = [...new Set(body.optionIds.map((item) => parseId(item)).filter(Boolean))];
-
-        if (optionIds.length !== body.optionIds.length) {
-            return res.status(400).json({ error: 'optionIds 含非法 ID' });
-        }
-
-        if (optionIds.length > 0) {
-            const existingOptions = await pool.query(
-                'SELECT COUNT(*)::int AS count FROM food_options WHERE id = ANY($1::bigint[])',
-                [optionIds]
-            );
-            if (existingOptions.rows[0].count !== optionIds.length) {
-                return res.status(404).json({ error: '选项不存在' });
-            }
-        }
-
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
-
-            if (mode === 'replace') {
-                await client.query('DELETE FROM list_items WHERE list_id = $1', [listId]);
-            }
-
-            const sql = mode === 'remove'
-                ? 'DELETE FROM list_items WHERE list_id = $1 AND option_id = ANY($2::bigint[])'
-                : 'INSERT INTO list_items(list_id, option_id) SELECT $1, id FROM unnest($2::bigint[]) AS t(id) ON CONFLICT DO NOTHING';
-
-            await client.query(sql, [listId, optionIds]);
-            await client.query('COMMIT');
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        } finally {
-            client.release();
-        }
-
-        const result = await pool.query('SELECT COUNT(*)::int AS count FROM list_items WHERE list_id = $1', [listId]);
-        return res.json({ listId, mode, count: result.rows[0].count });
-    } catch (error) {
-        if (error && error.code === '23503') {
-            return res.status(404).json({ error: '选项不存在' });
-        }
         return next(error);
     }
 });
@@ -993,7 +799,7 @@ app.get('/api/options/:id', async (req, res, next) => {
         }
 
         const result = await pool.query(
-            `${OPTIONS_SELECT} WHERE o.id = $1 GROUP BY o.id`,
+            `${OPTIONS_SELECT} WHERE o.id = $1`,
             [id]
         );
 
@@ -1007,6 +813,71 @@ app.get('/api/options/:id', async (req, res, next) => {
     }
 });
 
+// 结果页的位置缩略图：服务端代理高德静态地图 API，AMAP_WEB_KEY 不出现在前端。
+// 未定位/不存在的店 404，key 未配置 503 —— 前端据此隐藏缩略图块
+app.get('/api/options/:id/staticmap', async (req, res, next) => {
+    try {
+        const id = parseId(req.params.id);
+        if (!id) {
+            return res.status(400).json({ error: '无效的选项 ID' });
+        }
+
+        const result = await pool.query(
+            'SELECT latitude, longitude FROM food_options WHERE id = $1',
+            [id]
+        );
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: '选项不存在' });
+        }
+        const { latitude, longitude } = result.rows[0];
+        if (latitude == null || longitude == null) {
+            return res.status(404).json({ error: '该店还没有定位' });
+        }
+        if (!AMAP_WEB_KEY) {
+            return res.status(503).json({ error: '地图服务未配置（缺少 AMAP_WEB_KEY）' });
+        }
+
+        // 个人 key 有 QPS 限制（约 3 次/秒），连续抽签容易撞上：失败就退避重试，
+        // 通常一次就能落到新的限流窗口
+        let lastError = null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            if (attempt > 0) {
+                await new Promise((resolve) => setTimeout(resolve, 400 + Math.floor(Math.random() * 300)));
+            }
+
+            const params = new URLSearchParams({
+                key: AMAP_WEB_KEY,
+                location: `${longitude},${latitude}`,
+                zoom: '15',
+                size: '480*280',
+                scale: '2',
+                markers: `mid,0xE7631C,A:${longitude},${latitude}`
+            });
+
+            let upstream;
+            try {
+                upstream = await fetch(`https://restapi.amap.com/v3/staticmap?${params}`);
+            } catch (fetchError) {
+                lastError = fetchError;
+                continue;
+            }
+
+            const contentType = upstream.headers.get('content-type') || '';
+            if (upstream.ok && contentType.startsWith('image/')) {
+                res.set('Content-Type', 'image/png');
+                res.set('Cache-Control', 'public, max-age=3600');
+                return res.send(Buffer.from(await upstream.arrayBuffer()));
+            }
+            lastError = new Error(`上游返回 ${upstream.status} ${contentType || '空 Content-Type'}`);
+        }
+
+        console.warn(`静态地图获取失败 (option ${id}): ${lastError && lastError.message}`);
+        return res.status(502).json({ error: '静态地图服务暂时不可用，稍后再试' });
+    } catch (error) {
+        return next(error);
+    }
+});
+
 app.post('/api/options', requireAdmin, async (req, res, next) => {
     try {
         const validation = validatePayload(req.body, { partial: false });
@@ -1014,83 +885,24 @@ app.post('/api/options', requireAdmin, async (req, res, next) => {
             return res.status(400).json({ error: validation.error });
         }
 
-        // 可选 listIds：把新店同时挂进多个榜单；不给则进默认榜单
-        const rawListIds = req.body && Array.isArray(req.body.listIds) ? req.body.listIds : null;
-        const listIds = rawListIds ? [...new Set(rawListIds.map((item) => parseId(item)).filter(Boolean))] : null;
+        const inserted = await pool.query(
+            `INSERT INTO food_options(name, emoji, latitude, longitude, address, tags)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             RETURNING id, name, emoji, latitude, longitude, address, tags`,
+            [
+                validation.data.name,
+                validation.data.emoji,
+                validation.data.latitude ?? null,
+                validation.data.longitude ?? null,
+                validation.data.address ?? null,
+                validation.data.tags ?? []
+            ]
+        );
 
-        if (rawListIds && listIds.length !== rawListIds.length) {
-            return res.status(400).json({ error: 'listIds 含非法榜单 ID' });
-        }
-
-        if (listIds && listIds.length > 0) {
-            const existingLists = await pool.query(
-                'SELECT COUNT(*)::int AS count FROM lists WHERE id = ANY($1::bigint[])',
-                [listIds]
-            );
-            if (existingLists.rows[0].count !== listIds.length) {
-                return res.status(404).json({ error: '榜单不存在' });
-            }
-        }
-
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
-
-            const inserted = await client.query(
-                `INSERT INTO food_options(name, emoji, latitude, longitude, address)
-                 VALUES ($1, $2, $3, $4, $5)
-                 RETURNING id, name, emoji, latitude, longitude, address`,
-                [
-                    validation.data.name,
-                    validation.data.emoji,
-                    validation.data.latitude ?? null,
-                    validation.data.longitude ?? null,
-                    validation.data.address ?? null
-                ]
-            );
-            const option = inserted.rows[0];
-
-            let targets = listIds;
-
-            if (!targets || targets.length === 0) {
-                const fallback = await client.query(
-                    'SELECT id FROM lists ORDER BY (name = $1) DESC, sort_order ASC, id ASC LIMIT 1',
-                    [DEFAULT_LIST_NAME]
-                );
-                targets = fallback.rowCount ? [fallback.rows[0].id] : [];
-            }
-
-            for (const listId of targets) {
-                await client.query(
-                    `INSERT INTO list_items(list_id, option_id)
-                     SELECT $1, $2 FROM lists WHERE id = $1
-                     ON CONFLICT DO NOTHING`,
-                    [listId, option.id]
-                );
-            }
-
-            await client.query('COMMIT');
-
-            const lists = await client.query(
-                `SELECT l.id, l.name FROM lists l
-                 JOIN list_items li ON li.list_id = l.id
-                 WHERE li.option_id = $1 ORDER BY l.sort_order, l.id`,
-                [option.id]
-            );
-
-            return res.status(201).json({ ...option, lists: lists.rows });
-        } catch (error) {
-            await client.query('ROLLBACK');
-            throw error;
-        } finally {
-            client.release();
-        }
+        return res.status(201).json(inserted.rows[0]);
     } catch (error) {
         if (error && error.code === '23505') {
             return res.status(409).json({ error: '已有同名店铺（改名或直接用现有的）' });
-        }
-        if (error && error.code === '23503') {
-            return res.status(404).json({ error: '榜单不存在' });
         }
         return next(error);
     }
@@ -1126,6 +938,10 @@ app.put('/api/options/:id', requireAdmin, async (req, res, next) => {
             params.push(data.longitude);
             assignments.push(`longitude = $${params.length}`);
         }
+        if (hasOwn.call(data, 'tags')) {
+            params.push(data.tags ?? []);
+            assignments.push(`tags = $${params.length}`);
+        }
         params.push(id);
         const idIndex = params.length;
 
@@ -1134,7 +950,7 @@ app.put('/api/options/:id', requireAdmin, async (req, res, next) => {
                 UPDATE food_options
                 SET ${assignments.join(', ')}
                 WHERE id = $${idIndex}
-                RETURNING id, name, emoji, latitude, longitude, address
+                RETURNING id, name, emoji, latitude, longitude, address, tags
             `,
             params
         );
@@ -1165,7 +981,7 @@ app.patch('/api/options/:id', requireAdmin, async (req, res, next) => {
         }
 
         const currentResult = await pool.query(
-            'SELECT id, name, emoji, latitude, longitude, address FROM food_options WHERE id = $1',
+            'SELECT id, name, emoji, latitude, longitude, address, tags FROM food_options WHERE id = $1',
             [id]
         );
 
@@ -1188,15 +1004,16 @@ app.patch('/api/options/:id', requireAdmin, async (req, res, next) => {
             return res.status(400).json({ error: 'latitude 和 longitude 必须成对提供或成对清除' });
         }
         const nextAddress = hasOwn.call(data, 'address') ? data.address : current.address;
+        const nextTags = hasOwn.call(data, 'tags') ? (data.tags ?? []) : (current.tags ?? []);
 
         const updatedResult = await pool.query(
             `
                 UPDATE food_options
-                SET name = $1, emoji = $2, latitude = $3, longitude = $4, address = $5, updated_at = NOW()
-                WHERE id = $6
-                RETURNING id, name, emoji, latitude, longitude, address
+                SET name = $1, emoji = $2, latitude = $3, longitude = $4, address = $5, tags = $6, updated_at = NOW()
+                WHERE id = $7
+                RETURNING id, name, emoji, latitude, longitude, address, tags
             `,
-            [nextName, nextEmoji, nextLatitude, nextLongitude, nextAddress, id]
+            [nextName, nextEmoji, nextLatitude, nextLongitude, nextAddress, nextTags, id]
         );
 
         return res.json(updatedResult.rows[0]);
@@ -1236,19 +1053,6 @@ app.post('/api/options/import', requireAdmin, async (req, res, next) => {
 
         const mode = body.mode;
         const rawItems = Array.isArray(body.items) ? body.items : [];
-        const rawListId = body.listId === undefined ? null : body.listId;
-        const listId = rawListId === null ? null : parseId(rawListId);
-
-        if (rawListId !== null && !listId) {
-            return res.status(400).json({ error: '无效的榜单 ID' });
-        }
-
-        if (listId) {
-            const exists = await pool.query('SELECT id FROM lists WHERE id = $1', [listId]);
-            if (exists.rowCount === 0) {
-                return res.status(404).json({ error: '榜单不存在' });
-            }
-        }
 
         // 逐项 normalize：带 error 的条目（非法坐标等）直接 400，避免一半入库一半丢失
         const normalized = rawItems.map((item, index) => ({ item: normalizeImportItem(item), index }));
@@ -1271,55 +1075,27 @@ app.post('/api/options/import', requireAdmin, async (req, res, next) => {
             await client.query('BEGIN');
             inTransaction = true;
 
-            let targetListId = listId;
-
             if (mode === 'replace') {
-                // list_items 通过外键引用 food_options，必须一起截断，
-                // 否则 Postgres 会以 22665 拒绝截断被引用的表
-                await client.query('TRUNCATE food_options, list_items RESTART IDENTITY CASCADE');
-            }
-
-            if (!targetListId) {
-                const fallback = await client.query(
-                    'SELECT id FROM lists ORDER BY (name = $1) DESC, sort_order ASC, id ASC LIMIT 1',
-                    [DEFAULT_LIST_NAME]
-                );
-                if (fallback.rowCount === 0) {
-                    const created_list = await client.query(
-                        'INSERT INTO lists(name, sort_order) VALUES ($1, $2) RETURNING id',
-                        [DEFAULT_LIST_NAME, 1]
-                    );
-                    targetListId = created_list.rows[0].id;
-                } else {
-                    targetListId = fallback.rows[0].id;
-                }
+                await client.query('TRUNCATE food_options RESTART IDENTITY CASCADE');
             }
 
             for (const item of items) {
-                // 重名不新建行，而是复用已有那一家 —— 否则榜单里会出现同一家店的两份真相
+                // 重名不新建行，而是复用已有那一家 —— 否则会出现同一家店的两份真相
                 const found = await client.query(
                     'SELECT id FROM food_options WHERE LOWER(name) = LOWER($1) ORDER BY id LIMIT 1',
                     [item.name]
                 );
 
-                let optionId;
-
                 if (found.rowCount > 0) {
-                    optionId = found.rows[0].id;
-                } else {
-                    const inserted = await client.query(
-                        `INSERT INTO food_options(name, emoji, latitude, longitude, address)
-                         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-                        [item.name, item.emoji, item.latitude ?? null, item.longitude ?? null, item.address ?? null]
-                    );
-                    optionId = inserted.rows[0].id;
-                    created += 1;
+                    continue;
                 }
 
                 await client.query(
-                    'INSERT INTO list_items(list_id, option_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-                    [targetListId, optionId]
+                    `INSERT INTO food_options(name, emoji, latitude, longitude, address, tags)
+                     VALUES ($1, $2, $3, $4, $5, $6)`,
+                    [item.name, item.emoji, item.latitude ?? null, item.longitude ?? null, item.address ?? null, item.tags ?? []]
                 );
+                created += 1;
             }
 
             await client.query('COMMIT');
@@ -1332,7 +1108,7 @@ app.post('/api/options/import', requireAdmin, async (req, res, next) => {
             client.release();
         }
 
-        const result = await pool.query(`${OPTIONS_SELECT} GROUP BY o.id ORDER BY o.id ASC`);
+        const result = await pool.query(`${OPTIONS_SELECT} ORDER BY o.id ASC`);
         return res.json({
             mode,
             imported: items.length,
@@ -1341,9 +1117,6 @@ app.post('/api/options/import', requireAdmin, async (req, res, next) => {
             options: result.rows
         });
     } catch (error) {
-        if (error && error.code === '23503') {
-            return res.status(404).json({ error: '榜单不存在' });
-        }
         return next(error);
     }
 });

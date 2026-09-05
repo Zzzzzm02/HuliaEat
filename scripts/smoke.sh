@@ -200,11 +200,8 @@ expect_code "PATCH 无密钥 → 401" 401 "$(code -X PATCH "${BASE}/api/options/
 expect_code "PUT 无密钥 → 401" 401 "$(code -X PUT "${BASE}/api/options/1" -H 'Content-Type: application/json' -d '{"name":"x","emoji":"🍜"}')"
 expect_code "import(replace) 无密钥 → 401，且数据未被清空" 401 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -d '{"mode":"replace","items":[{"name":"恶意","emoji":"🍜"}]}')"
 expect_code "未授权后数据量不变（仍 ${SEED_COUNT} 条）" "$SEED_COUNT" "$(count_of "${BASE}/api/options")"
-expect_code "POST /api/lists 无密钥 → 401" 401 "$(code -X POST "${BASE}/api/lists" -H 'Content-Type: application/json' -d '{"name":"未授权榜"}')"
-expect_code "PATCH /api/lists 无密钥 → 401" 401 "$(code -X PATCH "${BASE}/api/lists/1" -H 'Content-Type: application/json' -d '{"name":"未授权改名"}')"
-expect_code "DELETE /api/lists 无密钥 → 401" 401 "$(code -X DELETE "${BASE}/api/lists/1")"
-expect_code "membership 无密钥 → 401" 401 "$(code -X POST "${BASE}/api/lists/1/membership" -H 'Content-Type: application/json' -d '{"mode":"replace","optionIds":[1]}')"
 expect_code "Authorization: Bearer 也可通过" 201 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "Authorization: Bearer ${TOKEN}" -d '{"name":"Bearer 测试","emoji":"🥟"}')"
+expect_code "已退役的 /api/lists → JSON 404" 404 "$(code "${BASE}/api/lists")"
 
 # ---------------------------------------------------------------- CRUD 往返
 section "带密钥的完整 CRUD 往返"
@@ -231,55 +228,39 @@ BAD_JSON='{"name":'
 expect_code "坏 JSON → 400（不再被误报为 500）" 400 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$BAD_JSON")"
 expect_code "未知接口 → JSON 404" 404 "$(code "${BASE}/api/nope")"
 
-# ---------------------------------------------------------------- 多榜单
-section "多榜单：一店可属多榜、删榜不删店"
+# ---------------------------------------------------------------- 类型标签
+section "类型标签：一店多标签、按标签筛选"
 pick_id() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(j.id ?? "")}catch(e){console.log("")}})'; }
-json_len() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(Array.isArray(j)?j.length:(j.lists?j.lists.length:"n/a"))}catch(e){console.log("parse-error")}})'; }
-
-LIST_A=$(body -X POST "${BASE}/api/lists" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"榜A"}' | pick_id)
-LIST_B=$(body -X POST "${BASE}/api/lists" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"榜B"}' | pick_id)
-expect_code "新建两个榜单拿到 id" "ok" "$([ -n "$LIST_A" ] && [ -n "$LIST_B" ] && echo ok || echo empty)"
-expect_code "同名榜单冲突 → 409" 409 "$(code -X POST "${BASE}/api/lists" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"榜A"}')"
-expect_code "新建榜单缺少 name → 400" 400 "$(code -X POST "${BASE}/api/lists" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"sortOrder":1}')"
-expect_code "GET /api/lists → 200" 200 "$(code "${BASE}/api/lists")"
+json_field() { # body json-key → 值（数组用 | 连接）
+    printf '%s' "$1" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);const v=j[process.argv[1]];console.log(Array.isArray(v)?v.join("|"):(v===undefined?"missing":v===null?"null":String(v)))}catch(e){console.log("parse-error")}})' "$2"
+}
 
 OPT_ID=$(body "${BASE}/api/options" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].id))')
 expect_code "ID 带后缀 → 400" 400 "$(code "${BASE}/api/options/${OPT_ID}abc")"
-BEFORE_BAD_LIST=$(count_of "${BASE}/api/options")
-expect_code "新增到不存在榜单 → 404" 404 "$(code -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"name":"不存在榜单的店","emoji":"🍜","listIds":[999999]}')"
-expect_code "不存在榜单不会新增孤儿店" "$BEFORE_BAD_LIST" "$(count_of "${BASE}/api/options")"
 
-# 说明：payload 一律先赋值给变量再传入。
-# macOS 的 bash 3.2 在「双引号参数里嵌套 $( )，再用 \" 转义」时会拼错引号，
-# 把合法 JSON 打散成非法 JSON —— 于是测的其实是解析器而不是接口。
-PAYLOAD_ADD='{"mode":"add","optionIds":['$OPT_ID']}'
-PAYLOAD_EXPLODE='{"mode":"explode","optionIds":[1]}'
-PAYLOAD_REPLACE_EMPTY='{"mode":"replace","optionIds":[]}'
+TAG_BODY='{"name":"标签火锅","emoji":"🍲","tags":["火锅","夜宵"]}'
+TAG_ID=$(body -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$TAG_BODY" | pick_id)
+expect_code "POST 带标签 → 拿到 id" "ok" "$([ -n "$TAG_ID" ] && echo ok || echo empty)"
+expect_code "GET 单条读回标签" "火锅|夜宵" "$(json_field "$(body "${BASE}/api/options/${TAG_ID}")" tags)"
+expect_code "按标签筛选（?tag=火锅）→ 1 条" 1 "$(count_of "${BASE}/api/options?tag=%E7%81%AB%E9%94%85")"
+expect_code "不存在的标签 → 空结果而非 500" 0 "$(count_of "${BASE}/api/options?tag=not-a-real-tag")"
 
-MEMBER_ADD=$(code -X POST "${BASE}/api/lists/${LIST_A}/membership" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$PAYLOAD_ADD")
-expect_code "membership add 进榜A → 200" 200 "$MEMBER_ADD"
-expect_code "按榜A过滤 → 1 条" 1 "$(count_of "${BASE}/api/options?list=${LIST_A}")"
-expect_code "按榜B过滤 → 0 条（尚未加入）" 0 "$(count_of "${BASE}/api/options?list=${LIST_B}")"
-expect_code "非法 list 参数 → 400" 400 "$(code "${BASE}/api/options?list=not-a-number")"
+expect_code "PATCH 替换标签 → 200" 200 "$(code -X PATCH "${BASE}/api/options/${TAG_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"tags":["火锅"]}')"
+expect_code "替换后只剩一个标签" "火锅" "$(json_field "$(body "${BASE}/api/options/${TAG_ID}")" tags)"
+expect_code "PATCH 空数组清空标签 → 200" 200 "$(code -X PATCH "${BASE}/api/options/${TAG_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"tags":[]}')"
+expect_code "清空后标签为空" "" "$(json_field "$(body "${BASE}/api/options/${TAG_ID}")" tags)"
+expect_code "PATCH 恢复标签（供后续断言用）" 200 "$(code -X PATCH "${BASE}/api/options/${TAG_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"tags":["火锅","夜宵"]}')"
 
-MEMBER_EXPLODE=$(code -X POST "${BASE}/api/lists/${LIST_A}/membership" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$PAYLOAD_EXPLODE")
-expect_code "非法 membership mode → 400" 400 "$MEMBER_EXPLODE"
-MEMBER_MISSING=$(code -X POST "${BASE}/api/lists/${LIST_A}/membership" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"add","optionIds":[999999]}')
-expect_code "加入不存在店铺 → 404" 404 "$MEMBER_MISSING"
+expect_code "tags 不是数组 → 400" 400 "$(code -X PATCH "${BASE}/api/options/${TAG_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"tags":"火锅"}')"
+expect_code "标签超过 6 个 → 400" 400 "$(code -X PATCH "${BASE}/api/options/${TAG_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"tags":["一","二","三","四","五","六","七"]}')"
+expect_code "单个标签超过 12 字 → 400" 400 "$(code -X PATCH "${BASE}/api/options/${TAG_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"tags":["这是一个特别特别特别长的标签名"]}')"
+expect_code "标签含非字符串项 → 400" 400 "$(code -X PATCH "${BASE}/api/options/${TAG_ID}" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"tags":["火锅",123]}')"
 
-MULTI_BODY='{"name":"双榜店","emoji":"🍜","listIds":['$LIST_A','${LIST_B}']}'
-MULTI_ID=$(body -X POST "${BASE}/api/options" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$MULTI_BODY" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log((j.lists||[]).length)})')
-expect_code "一店同属两榜（lists 长度 2）" 2 "$MULTI_ID"
-expect_code "双榜店在榜A过滤中出现" 2 "$(count_of "${BASE}/api/options?list=${LIST_A}")"
-
-BEFORE_DEL=$(count_of "${BASE}/api/options")
-expect_code "删除榜B → 204" 204 "$(code -X DELETE "${BASE}/api/lists/${LIST_B}" -H "x-admin-token: ${TOKEN}")"
-expect_code "删榜后店本身不减少" "$BEFORE_DEL" "$(count_of "${BASE}/api/options")"
-expect_code "已删的榜B查询 → 空结果而非 500" 0 "$(count_of "${BASE}/api/options?list=${LIST_B}")"
-
-MEMBER_RESET=$(code -X POST "${BASE}/api/lists/${LIST_A}/membership" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$PAYLOAD_REPLACE_EMPTY")
-expect_code "membership replace 可整榜重置" 200 "$MEMBER_RESET"
-expect_code "重置后榜A为空" 0 "$(count_of "${BASE}/api/options?list=${LIST_A}")"
+TAG_IMPORT='{"mode":"append","items":[{"name":"导入带标签","emoji":"🍜","tags":["面","夜宵"]}]}'
+expect_code "import 带标签 → 200" 200 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d "$TAG_IMPORT")"
+IMPORT_TAG=$(body "${BASE}/api/options" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const o=JSON.parse(s).find((x)=>x.name==="导入带标签");console.log(o&&o.tags?o.tags.join("|"):"missing")})')
+expect_code "import 的标签入了库" "面|夜宵" "$IMPORT_TAG"
+expect_code "import 非法标签 → 400（整单拒绝）" 400 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"append","items":[{"name":"坏标签","emoji":"🍜","tags":[123]}]}')"
 
 # ---------------------------------------------------------------- 地理信息
 section "地理信息：可选但填了就必须合法"
@@ -314,6 +295,12 @@ expect_code "import 带坐标 → 200" 200 "$(code -X POST "${BASE}/api/options/
 IMPORT_COORD=$(body "${BASE}/api/options" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const o=JSON.parse(s).find((x)=>x.name==="导入带坐标");console.log(o&&o.longitude!=null?String(o.longitude):"missing")})')
 expect_code "import 的坐标入了库" "120.1" "$IMPORT_COORD"
 expect_code "import 非法坐标 → 400（整单拒绝）" 400 "$(code -X POST "${BASE}/api/options/import" -H 'Content-Type: application/json' -H "x-admin-token: ${TOKEN}" -d '{"mode":"append","items":[{"name":"坏坐标","emoji":"🍜","latitude":99,"longitude":120}]}')"
+
+# 结果页的位置缩略图（CI 里没有 AMAP_WEB_KEY，只测不依赖 key 的分支）
+NOGEO_ID=$(body "${BASE}/api/options" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const o=JSON.parse(s).find((x)=>x.name==="导入无坐标");console.log(o?o.id:"")})')
+expect_code "缩略图接口：未定位的店 → 404" 404 "$(code "${BASE}/api/options/${NOGEO_ID}/staticmap")"
+expect_code "缩略图接口：不存在的店 → 404" 404 "$(code "${BASE}/api/options/999999/staticmap")"
+expect_code "缩略图接口：非法 id → 400" 400 "$(code "${BASE}/api/options/xx/staticmap")"
 
 # ---------------------------------------------------------------- 静态资源
 section "静态资源只放行前端真正需要的文件"
