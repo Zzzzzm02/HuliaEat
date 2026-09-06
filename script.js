@@ -35,16 +35,16 @@ const DEFAULT_IMPORT_EMOJI = '🍽️';
 
 /* 标签 → 筛选 chip 文案：短句、俏皮，不追求严格分类；没收录的标签回退「今天想吃X」 */
 const TAG_CHIP_LABELS = {
-    '精选': '狐狸精选',
+    '精选': '乌萨奇精选',
     '杭帮菜': '吃点好的',
     '面': '嗦碗面',
-    '小吃': '垫垫肚子',
     '火锅': '整点火锅',
     '烧烤': '撸串烤肉',
-    '夜宵': '深夜食堂',
-    '换口味': '换换口味',
-    '就近随便吃': '随便吃点'
+    '换口味': '换换口味'
 };
+
+/* 不单独出 chip 的标签:店仍在「全部」与类型筛选之外的数据里,只是不占筛选位 */
+const HIDDEN_TAG_CHIPS = new Set(['就近随便吃', '小吃', '夜宵']);
 
 function tagChipLabel(tag) {
     return TAG_CHIP_LABELS[tag] || `今天想吃${tag}`;
@@ -312,9 +312,10 @@ function collectTags() {
         }
         return [];
     }
-    // 池标记(精选/随便吃点)固定排最前,其余类型按店数降序
+    // 池标记(精选/随便吃点)固定排最前,隐藏标签不出 chip,其余类型按店数降序
     const priority = { [CURATED_TAG]: 0, [EXTENSION_TAG]: 1 };
     return [...counts.entries()]
+        .filter(([name]) => !HIDDEN_TAG_CHIPS.has(name))
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => (priority[a.name] ?? 9) - (priority[b.name] ?? 9)
             || b.count - a.count || a.name.localeCompare(b.name, 'zh'));
@@ -763,23 +764,26 @@ function initNearby() {
 
 function locateNearby() {
     const status = document.getElementById('nearby-status');
-    const note = document.getElementById('nearby-note');
-    const say = (text) => {
-        if (status) status.textContent = text;
+
+    // 定位不可用时的降级:直接回首页,从「全部」里抽
+    const fallbackHome = (msg) => {
+        nearbyState.locating = false;
+        switchScreen('start-screen');
+        const note = document.getElementById('exclusion-note');
         if (note) {
-            note.hidden = !text || !/失败|不支持/.test(text);
-            note.textContent = /失败|不支持/.test(text) ? text : '';
+            note.hidden = false;
+            note.textContent = msg;
         }
     };
 
     if (!navigator.geolocation) {
-        say('这个浏览器不支持定位');
+        fallbackHome('这个浏览器不支持定位，回首页从「全部」里抽一个吧');
         renderNearbyControls();
         return;
     }
     if (nearbyState.locating) return;
     nearbyState.locating = true;
-    say('正在获取定位…');
+    if (status) status.textContent = '正在获取定位…';
 
     navigator.geolocation.getCurrentPosition(async (pos) => {
         nearbyState.locating = false;
@@ -787,8 +791,7 @@ function locateNearby() {
         nearbyState.lng = pos.coords.longitude;
         await loadNearbyList();
     }, (err) => {
-        nearbyState.locating = false;
-        say(`定位失败：${err.message}（页面需 HTTPS 或 localhost，可重进本屏重试）`);
+        fallbackHome(`定位不可用（${err.message}），回首页从全部 ${foodOptions.length} 家里抽吧`);
         renderNearbyControls();
     }, { timeout: 8000, maximumAge: 300000 });
 }
