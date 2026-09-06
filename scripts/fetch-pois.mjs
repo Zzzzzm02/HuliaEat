@@ -52,6 +52,8 @@ const CIRCLES = [
 // 这些品类不当正餐(糕饼/饮品/甜品/咖啡奶茶/茶馆茶楼等),按类型词跳过;
 // 茶餐厅是正经吃饭的地方,刻意不在排除列表里
 const EXCLUDE_TYPE_RE = /糕饼|饮品|果品|茶艺|冷饮|甜品|咖啡|coffee|奶茶|茶饮|烘焙|面包|蛋糕|冰淇淋|酸奶|果汁|茶馆|茶楼|香氛/;
+// 国际/全国连锁快餐与茶饮品牌:就近抽签不吃预制连锁,按店名跳过
+const CHAIN_RE = /麦当劳|肯德基|KFC|必胜客|汉堡王|塔斯汀|华莱士|德克士|赛百味|萨莉亚|星巴克|喜茶|奈雪|蜜雪冰城|霸王茶姬|茶百道|古茗|沪上阿姨|瑞幸|库迪|尊宝比萨|达美乐|棒约翰|正新鸡排|叫了个炸鸡|麦咖啡/;
 // 类型 → 追加标签(能判断出来的才给,判断不出就只挂「就近随便吃」)
 function extraTags(poi) {
     const type = String(poi.type || '');
@@ -113,7 +115,7 @@ async function main() {
             if (!pois.length) break;
             for (const poi of pois) {
                 const hay = `${poi.type || ''} ${(poi.business && poi.business.keytag) || ''}`;
-                if (EXCLUDE_TYPE_RE.test(hay)) continue;
+                if (EXCLUDE_TYPE_RE.test(hay) || CHAIN_RE.test(String(poi.name || ''))) continue;
 
                 const rating = poi.business && poi.business.rating != null ? Number(poi.business.rating) : null;
                 // 刷新模式收全部(要看评分下滑/闭店);入库模式按门槛筛

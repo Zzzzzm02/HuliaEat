@@ -427,8 +427,8 @@ function renderTagChips() {
             container.appendChild(chip);
         });
 
-        // 三选一只放首页:与标签并列的一枚 chip,点了在首页原位出三张卡
-        if (container.id === 'list-chips') {
+        // 三选一暂缓上线(有 bug),开关 TRIPLE_ENABLED 改回 true 即恢复
+        if (container.id === 'list-chips' && TRIPLE_ENABLED) {
             const tripleChip = document.createElement('button');
             tripleChip.type = 'button';
             tripleChip.className = `chip chip-triple${tripleMode ? ' active' : ''}`;
@@ -1002,11 +1002,15 @@ function drawNearby() {
 
 /* ---------------- 三选一：首页就地连抽 3 张卡，选一张再看地图 ---------------- */
 
+// 有 bug 暂时下线:改好后把开关改回 true 即可重新启用
+const TRIPLE_ENABLED = false;
+
 let tripleCandidates = [];
 let tripleMode = false;
 
 // 三选一 chip:点开在首页原位出 3 张卡(不跳页)
 function openTriple() {
+    if (!TRIPLE_ENABLED) return;
     const shuffled = [...getPool()].sort(() => Math.random() - 0.5);
     tripleCandidates = shuffled.slice(0, 3);
     tripleMode = true;
