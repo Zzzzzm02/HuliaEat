@@ -101,12 +101,20 @@
         const tagsHtml = (option.tags || [])
             .map((tag) => `<span class="map-popup-tag">${escapeHtml(tag)}</span>`)
             .join('');
+        // 评分/人均(有就展示)
+        const metaBits = [];
+        if (option.rating != null) metaBits.push(`⭐ ${option.rating}`);
+        if (option.cost != null) metaBits.push(`¥${option.cost}/人`);
+        const metaHtml = metaBits.length
+            ? `<div class="map-popup-meta">${escapeHtml(metaBits.join(' · '))}</div>`
+            : '';
         infoWindow.setContent(`
             <div class="map-popup">
                 <div class="map-popup-head">
                     <span class="map-popup-emoji">${escapeHtml(option.emoji || '🍽️')}</span>
                     <strong>${escapeHtml(option.name)}</strong>
                 </div>
+                ${metaHtml}
                 ${option.address ? `<div class="map-popup-address">📍 ${escapeHtml(option.address)}</div>` : ''}
                 ${tagsHtml ? `<div class="map-popup-tags">${tagsHtml}</div>` : ''}
             </div>

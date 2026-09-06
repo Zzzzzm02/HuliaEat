@@ -1851,6 +1851,20 @@ input:focus-visible {
     color: var(--ink-2);
 }
 
+.map-popup-meta {
+    margin-top: .4rem;
+    font-size: .78rem;
+    font-weight: 600;
+    color: var(--fox-deep);
+}
+
+.option-tag-cost {
+    background: var(--fox-soft);
+    border-color: transparent;
+    color: var(--fox-deep);
+    font-weight: 600;
+}
+
 .map-popup-tags {
     display: flex;
     flex-wrap: wrap;

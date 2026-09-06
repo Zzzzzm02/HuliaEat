@@ -693,29 +693,32 @@ function updateResultMap(option) {
     if (!content || !addr || !link || !img || !mapName || !mapAddr) return;
 
     resultMapOptionId = option && option.id ? option.id : null;
-    const address = option && option.address ? option.address : '';
-    const distText = option && option.distance_meters != null
-        ? ` · 距你 ${formatDistance(option.distance_meters)}`
-        : '';
+
+    // 信息行:地址 · 人均 · 距离(有什么显示什么)
+    const infoBits = [];
+    if (option.address) infoBits.push(`📍 ${option.address}`);
+    if (option.cost != null) infoBits.push(`¥${option.cost}/人`);
+    if (option.distance_meters != null) infoBits.push(`距你 ${formatDistance(option.distance_meters)}`);
+    const infoText = infoBits.join(' · ');
 
     const located = option && option.latitude != null && option.longitude != null;
     if (!located) {
         content.hidden = false;
-        addr.textContent = address ? `📍 ${address}${distText}` : '';
-        addr.hidden = !address;
+        addr.textContent = infoText;
+        addr.hidden = !infoText;
         link.hidden = true;
         img.removeAttribute('src');
         return;
     }
 
     mapName.textContent = `${option.emoji || ''} ${option.name}`.trim();
-    mapAddr.textContent = `${address || '📍 图中标记即店铺位置'}${distText}`;
+    mapAddr.textContent = infoText || '📍 图中标记即店铺位置';
     // 加载失败（服务未配置/配额超限/网络）时回退到 emoji + 店名，不阻碍抽签主流程
     img.onerror = () => {
         link.hidden = true;
         content.hidden = false;
-        addr.textContent = address ? `📍 ${address}` : '';
-        addr.hidden = !address;
+        addr.textContent = infoText;
+        addr.hidden = !infoText;
     };
     img.src = `${API_BASE}/options/${option.id}/staticmap`;
     link.hidden = false;
@@ -1406,9 +1409,15 @@ function createOptionView(option) {
     content.appendChild(emoji);
     content.appendChild(name);
 
-    // 类型标签
+    // 类型标签(人均放最前)
     const tagsSpan = document.createElement('span');
     tagsSpan.className = 'option-tags';
+    if (option.cost != null) {
+        const costTag = document.createElement('span');
+        costTag.className = 'option-tag option-tag-cost';
+        costTag.textContent = `¥${option.cost}/人`;
+        tagsSpan.appendChild(costTag);
+    }
     (option.tags || []).forEach((tag) => {
         const tagEl = document.createElement('span');
         tagEl.className = 'option-tag';
