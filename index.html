@@ -73,7 +73,13 @@
                     <p id="exclusion-note" class="exclusion-note" hidden></p>
 
                     <button id="start-btn" class="main-btn">开始选择</button>
-                    <button id="triple-btn" class="outline-btn triple-btn">🎲 三选一，纠结症急救</button>
+                    <div id="triple-inline" class="triple-inline" hidden>
+                        <div id="triple-cards" class="triple-cards"></div>
+                        <div class="triple-actions">
+                            <button id="triple-redo-btn" class="chip-action" type="button">🎲 换一批</button>
+                            <button id="triple-back-btn" class="chip-action" type="button">取消</button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- 结果 -->
@@ -104,20 +110,8 @@
                     <p id="result-note" class="exclusion-note" hidden></p>
                 </div>
 
-                <!-- 三选一：连抽 3 个候选，选一个再上图 -->
-                <div id="triple-screen" class="screen">
-                    <div class="nearby-header">
-                        <h2 class="manage-title">三选一</h2>
-                        <p class="manage-subtitle">凭直觉点一张最想吃的，选完带你去看它在哪</p>
-                    </div>
-                    <div id="triple-cards" class="triple-cards"></div>
-                    <div class="triple-actions">
-                        <button id="triple-redo-btn" class="secondary-btn">换一批</button>
-                        <button id="triple-back-btn" class="outline-btn">返回</button>
-                    </div>
-                </div>
-
                 <!-- 附近：定位就近挑选与抽签 -->
+                <div id="nearby-screen" class="screen">
                     <div class="nearby-header">
                         <h2 class="manage-title">附近吃什么</h2>
                         <p class="manage-subtitle" id="nearby-status">正在获取定位…</p>

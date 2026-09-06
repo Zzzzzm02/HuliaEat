@@ -426,6 +426,17 @@ function renderTagChips() {
             chip.addEventListener('click', () => selectTag(name));
             container.appendChild(chip);
         });
+
+        // 三选一只放首页:与标签并列的一枚 chip,点了在首页原位出三张卡
+        if (container.id === 'list-chips') {
+            const tripleChip = document.createElement('button');
+            tripleChip.type = 'button';
+            tripleChip.className = `chip chip-triple${tripleMode ? ' active' : ''}`;
+            tripleChip.textContent = '三选一';
+            tripleChip.title = '连抽 3 个,选一个最想吃的';
+            tripleChip.addEventListener('click', () => (tripleMode ? exitTriple() : openTriple()));
+            container.appendChild(tripleChip);
+        }
     });
 
     renderExclusionNote();
@@ -434,6 +445,7 @@ function renderTagChips() {
 function selectTag(tag) {
     selectedTag = tag || null;
     nearbyPool = null; // 切走标签即退出就近模式
+    if (tripleMode) exitTriple(); // 切标签同时退出三选一模式
 
     try {
         if (selectedTag) {
@@ -985,16 +997,35 @@ function drawNearby() {
     startAnimation();
 }
 
-/* ---------------- 三选一：连抽 3 张卡，选一张再看地图 ---------------- */
+/* ---------------- 三选一：首页就地连抽 3 张卡，选一张再看地图 ---------------- */
 
 let tripleCandidates = [];
+let tripleMode = false;
 
+// 三选一 chip:点开在首页原位出 3 张卡(不跳页)
 function openTriple() {
-    // 从当前池子洗牌取 3 家(不足 3 就有几张出几张),互不重复
     const shuffled = [...getPool()].sort(() => Math.random() - 0.5);
     tripleCandidates = shuffled.slice(0, 3);
-    switchScreen('triple-screen');
+    tripleMode = true;
+    renderTripleMode();
+}
+
+function exitTriple() {
+    tripleMode = false;
+    renderTripleMode();
+}
+
+// 三选一模式下首页变身:大 logo 区和单抽按钮暂时让位给三张卡
+function renderTripleMode() {
+    const hero = document.querySelector('.hero-content');
+    const startBtn = document.getElementById('start-btn');
+    const inline = document.getElementById('triple-inline');
+    if (hero) hero.hidden = tripleMode;
+    if (startBtn) startBtn.hidden = tripleMode;
+    if (inline) inline.hidden = !tripleMode;
     renderTripleCards();
+    // 卡片出在筛选行下方,滚回顶部让三张卡尽收眼底
+    window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function renderTripleCards() {
@@ -1047,6 +1078,7 @@ function renderTripleCards() {
 
 function pickTriple(option) {
     if (!option) return;
+    exitTriple();
     switchScreen('result-screen');
     showChosenResult(option);
 }
@@ -1651,13 +1683,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (delistBtn) delistBtn.addEventListener('click', delistCurrentResult);
     if (resultMapLink) resultMapLink.addEventListener('click', openResultOnMap);
 
-    // 三选一
-    const tripleBtn = document.getElementById('triple-btn');
+    // 三选一(首页就地)
     const tripleRedoBtn = document.getElementById('triple-redo-btn');
     const tripleBackBtn = document.getElementById('triple-back-btn');
-    if (tripleBtn) tripleBtn.addEventListener('click', openTriple);
-    if (tripleRedoBtn) tripleRedoBtn.addEventListener('click', renderTripleCards);
-    if (tripleBackBtn) tripleBackBtn.addEventListener('click', () => switchScreen('start-screen'));
+    if (tripleRedoBtn) tripleRedoBtn.addEventListener('click', () => { tripleCandidates = [...getPool()].sort(() => Math.random() - 0.5).slice(0, 3); renderTripleCards(); });
+    if (tripleBackBtn) tripleBackBtn.addEventListener('click', exitTriple);
 
     // 今日历史弹窗
     const todayStat = document.getElementById('today-stat');

@@ -1199,13 +1199,24 @@ button {
     font-size: .92rem;
 }
 
-/* ---------------- 三选一 ---------------- */
+/* ---------------- 三选一(首页就地) ---------------- */
 
-.triple-btn {
-    display: block;
+.chip-triple {
+    background: var(--fox);
+    border-color: var(--fox);
+    color: var(--cream);
+    font-weight: 600;
+}
+
+.chip-triple:hover {
+    background: var(--fox-deep);
+    border-color: var(--fox-deep);
+    color: var(--cream);
+}
+
+.triple-inline {
     width: 100%;
-    max-width: 320px;
-    margin: .9rem auto 0;
+    margin-top: .3rem;
 }
 
 .triple-cards {
@@ -1429,6 +1440,121 @@ input:focus-visible {
 
     .nav-btn {
         font-size: .84rem;
+    }
+
+    /* 手机端一屏收紧:能不滚动就不滚动 */
+    .container {
+        padding: 1.3rem 1.1rem 1rem;
+    }
+
+    .header {
+        margin-bottom: .9rem;
+    }
+
+    .brand {
+        gap: .7rem;
+        margin-bottom: .5rem;
+    }
+
+    .brand-badge {
+        width: 52px;
+        height: 52px;
+    }
+
+    .title {
+        font-size: 1.22rem;
+    }
+
+    .subtitle {
+        display: none;
+    }
+
+    .stats {
+        gap: 1rem;
+        padding: .55rem 1.1rem;
+    }
+
+    .stat-number {
+        font-size: 1.25rem;
+    }
+
+    .stat-label {
+        font-size: .68rem;
+        margin-top: .2rem;
+    }
+
+    .nav {
+        margin-bottom: 1rem;
+    }
+
+    .hero-content {
+        margin-bottom: 1rem;
+    }
+
+    .hero-media {
+        width: 104px;
+        height: 104px;
+        margin-bottom: .8rem;
+    }
+
+    .hero-media::after {
+        inset: -9px;
+    }
+
+    .hero-title {
+        font-size: 1.28rem;
+        margin-bottom: .35rem;
+    }
+
+    .hero-subtitle {
+        font-size: .82rem;
+    }
+
+    .list-chips {
+        gap: .4rem;
+        margin-bottom: .7rem;
+    }
+
+    .chip {
+        padding: .42rem .68rem;
+        font-size: .8rem;
+    }
+
+    .main-btn {
+        padding: .9rem 2rem;
+        font-size: 1.05rem;
+    }
+
+    .triple-cards {
+        gap: .55rem;
+    }
+
+    .triple-card {
+        padding: .6rem .7rem;
+    }
+
+    .triple-card-emoji {
+        width: 38px;
+        height: 38px;
+        font-size: 1.15rem;
+    }
+
+    .triple-card-name {
+        font-size: .95rem;
+    }
+
+    .triple-actions {
+        margin-top: .7rem;
+        gap: .6rem;
+    }
+
+    /* 矮屏再省一截:大 mascot 图让位给内容(氛围靠环境层保底) */
+    .hero-media {
+        display: none;
+    }
+
+    .hero-content {
+        margin-bottom: .8rem;
     }
 
     .geo-row {
