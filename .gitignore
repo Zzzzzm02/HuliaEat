@@ -8,3 +8,4 @@ yarn-error.log*
 
 # 本地紧急备份（不进仓库；仓库里进版本库的是 data/options.json 快照）
 data/backups/
+.mimosa/
