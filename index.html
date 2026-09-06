@@ -48,8 +48,9 @@
             </div>
         </header>
 
-        <nav class="nav two">
+        <nav class="nav">
             <button id="home-btn" class="nav-btn active">首页</button>
+            <button id="nearby-btn" class="nav-btn">附近</button>
             <button id="map-btn" class="nav-btn">地图</button>
             <!-- 管理入口默认隐藏：持密钥者通过 #manage 或连点 logo 5 次解锁 -->
             <button id="manage-btn" class="nav-btn" hidden>管理选项</button>
@@ -100,6 +101,18 @@
                         <button id="delist-btn" type="button" class="chip-action chip-action-danger" hidden>🗑️ 从菜单下架</button>
                     </div>
                     <p id="result-note" class="exclusion-note" hidden></p>
+                </div>
+
+                <!-- 附近：定位就近挑选与抽签 -->
+                <div id="nearby-screen" class="screen">
+                    <div class="nearby-header">
+                        <h2 class="manage-title">附近吃什么</h2>
+                        <p class="manage-subtitle" id="nearby-status">正在获取定位…</p>
+                        <div id="nearby-radius-chips" class="list-chips" role="tablist" aria-label="选择半径"></div>
+                        <div id="nearby-sort-chips" class="list-chips" role="tablist" aria-label="列表排序"></div>
+                    </div>
+                    <div id="nearby-list" class="nearby-list"></div>
+                    <button id="nearby-draw-btn" class="main-btn nearby-draw-btn" hidden>就近抽一个</button>
                 </div>
 
                 <!-- 地图：已定位的店标在高德地图上 -->

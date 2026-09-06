@@ -768,7 +768,7 @@ app.get('/api/admin/check', requireAdmin, (req, res) => {
 });
 
 const OPTIONS_SELECT = `
-    SELECT o.id, o.name, o.emoji, o.latitude, o.longitude, o.address, o.tags
+    SELECT o.id, o.name, o.emoji, o.latitude, o.longitude, o.address, o.tags, o.rating, o.cost
     FROM food_options o
 `;
 
@@ -790,7 +790,7 @@ app.get('/api/options', async (req, res, next) => {
                 cos(radians($1)) * cos(radians(o.latitude)) * cos(radians(o.longitude) - radians($2))
                 + sin(radians($1)) * sin(radians(o.latitude))))))`;
             const result = await pool.query(
-                `SELECT o.id, o.name, o.emoji, o.latitude, o.longitude, o.address, o.tags,
+                `SELECT o.id, o.name, o.emoji, o.latitude, o.longitude, o.address, o.tags, o.rating, o.cost,
                         round(${distExpr})::int AS distance_meters
                  FROM food_options o
                  WHERE o.latitude IS NOT NULL AND ${distExpr} <= $3

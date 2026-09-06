@@ -309,21 +309,25 @@ body::after {
     transition: transform .38s var(--spring);
 }
 
-.nav:has(#map-btn.active)::before {
+.nav:has(#nearby-btn.active)::before {
     transform: translateX(100%);
 }
 
-.nav:has(#manage-btn.active)::before {
+.nav:has(#map-btn.active)::before {
     transform: translateX(200%);
 }
 
-/* 管理入口隐藏时导航退回两段式 */
-.nav.two {
-    width: 210px;
+.nav:has(#manage-btn.active)::before {
+    transform: translateX(300%);
 }
 
-.nav.two::before {
-    width: calc((100% - 8px) / 2);
+/* 管理入口解锁后导航变四段 */
+.nav.four {
+    width: 372px;
+}
+
+.nav.four::before {
+    width: calc((100% - 8px) / 4);
 }
 
 .nav-btn {
@@ -1258,8 +1262,12 @@ input:focus-visible {
         width: 268px;
     }
 
+    .nav.four {
+        width: 320px;
+    }
+
     .nav-btn {
-        font-size: .88rem;
+        font-size: .84rem;
     }
 
     .geo-row {
@@ -1565,6 +1573,104 @@ input:focus-visible {
     border-radius: var(--r-pill);
     background: var(--fox-soft);
     color: var(--fox-deep);
+}
+
+/* ---------------- 附近屏 ---------------- */
+
+.nearby-header {
+    width: 100%;
+    margin-bottom: .6rem;
+}
+
+.nearby-list {
+    display: flex;
+    flex-direction: column;
+    gap: .55rem;
+    width: 100%;
+    max-height: 46vh;
+    overflow-y: auto;
+    padding: .2rem .35rem .2rem 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+}
+
+.nearby-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.nearby-list::-webkit-scrollbar-thumb {
+    background: var(--line);
+    border-radius: 3px;
+}
+
+.nearby-card {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    width: 100%;
+    padding: .65rem .8rem;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    cursor: pointer;
+    text-align: left;
+    transition: border-color .2s var(--ease), background .2s var(--ease), transform .2s var(--ease);
+}
+
+.nearby-card:hover {
+    border-color: var(--fox);
+    background: var(--cream-2);
+    transform: translateY(-1px);
+}
+
+.nearby-card-emoji {
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    font-size: 1.2rem;
+    background: var(--fox-soft);
+    border-radius: var(--r-sm);
+}
+
+.nearby-card-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: .2rem;
+}
+
+.nearby-card-name {
+    font-weight: 600;
+    font-size: .94rem;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+}
+
+.nearby-card-meta {
+    font-size: .76rem;
+    color: var(--ink-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nearby-card-dist {
+    flex-shrink: 0;
+    font-size: .8rem;
+    font-weight: 600;
+    color: var(--fox-deep);
+    font-variant-numeric: tabular-nums;
+}
+
+.nearby-draw-btn {
+    width: 100%;
+    max-width: 320px;
+    margin-top: 1.2rem;
+    padding: 1rem 2rem;
+    font-size: 1.1rem;
 }
 
 /* ---------------- 地理信息（管理页表单） ---------------- */

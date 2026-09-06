@@ -20,8 +20,9 @@ for (const line of env.split('\n')) {
 
 const KEY = (process.env.AMAP_WEB_KEY || '').trim();
 const APPLY = process.argv.includes('--apply');
-const RATING_MIN = 4.2;      // 评分门槛,当"人气"用
-const TOTAL_CAP = 400;       // 整个池子上限
+const REFRESH = process.argv.includes('--refresh-ratings');
+const RATING_MIN = 4.2;      // 评分门槛,当"人气"用(只管新店入库;刷新模式不受限)
+const TOTAL_CAP = 400;       // 整个池子上限(刷新模式不受限)
 const PAGES_PER_CIRCLE = 4;  // 每个商圈最多翻 4 页(25 条/页)
 const GAP_MS = 400;
 
@@ -88,6 +89,12 @@ function buildAddress(poi) {
     return [poi.adname, poi.address].filter(Boolean).join('').slice(0, 200) || null;
 }
 
+function parseCost(poi) {
+    const raw = poi.business && poi.business.cost;
+    const n = raw != null ? Math.round(Number(raw)) : NaN;
+    return Number.isFinite(n) ? n : null;
+}
+
 async function main() {
     // 库内已有的店名不去撞(精选 59 家不进批量池,重名直接跳过)
     const existing = await pool.query('SELECT LOWER(name) AS k FROM food_options');
@@ -107,14 +114,17 @@ async function main() {
                 if (EXCLUDE_TYPE_RE.test(hay)) continue;
 
                 const rating = poi.business && poi.business.rating != null ? Number(poi.business.rating) : null;
-                if (rating === null || Number.isNaN(rating) || rating < RATING_MIN) continue;
+                // 刷新模式收全部(要看评分下滑/闭店);入库模式按门槛筛
+                if (!REFRESH && (rating === null || Number.isNaN(rating) || rating < RATING_MIN)) continue;
 
                 const key = `${poi.name}@${poi.location}`;
-                if (seen.has(key) || existingNames.has(String(poi.name).toLowerCase())) continue;
+                if (seen.has(key)) continue;
+                // 入库模式跳过与库内重名的;刷新模式要的恰恰是库内这些店
+                if (!REFRESH && existingNames.has(String(poi.name).toLowerCase())) continue;
 
                 seen.set(key, { ...poi, _rating: rating });
                 kept += 1;
-                if (seen.size >= TOTAL_CAP) break outer;
+                if (!REFRESH && seen.size >= TOTAL_CAP) break outer;
             }
             await sleep(GAP_MS);
         }
@@ -122,7 +132,7 @@ async function main() {
         console.log(`${circle[0]}: 累计 ${seen.size} 家`);
     }
 
-    console.log(`\n=== 共 ${seen.size} 家(评分 ≥ ${RATING_MIN}},${APPLY ? '将入库' : 'dry-run 未入库'} ===`);
+    console.log(`\n=== 共 ${seen.size} 家(${REFRESH ? '刷新评分' : `评分 ≥ ${RATING_MIN}`},${APPLY ? '将入库' : 'dry-run 未入库'} ===`);
     const list = [...seen.values()];
     for (const poi of list.slice(0, 25)) {
         const tags = ['就近随便吃', ...extraTags(poi)];
@@ -141,6 +151,27 @@ async function main() {
         console.log(`  ${lo}${hi ? '~' + hi : '+'}: ${n} 家`);
     }
 
+    // 刷新模式:只回填已有拓展店的评分/人均,顺带报告本轮没见到的店(可能闭店)
+    if (REFRESH) {
+        let updated = 0;
+        for (const poi of list) {
+            if (poi._rating === null) continue;
+            const r = await pool.query(
+                `UPDATE food_options SET rating = $1, cost = $2, updated_at = NOW()
+                 WHERE LOWER(name) = LOWER($3) AND '就近随便吃' = ANY(tags)`,
+                [poi._rating, parseCost(poi), poi.name]
+            );
+            updated += r.rowCount;
+        }
+        const inDb = await pool.query("SELECT name FROM food_options WHERE '就近随便吃' = ANY(tags)");
+        const seenNames = new Set(list.map((p) => String(p.name).toLowerCase()));
+        const unmatched = inDb.rows.map((r) => r.name).filter((n) => !seenNames.has(String(n).toLowerCase()));
+        console.log(`\n刷新完成:更新 ${updated} 家评分/人均;本轮未见到 ${unmatched.length} 家(可能闭店/改名,人工看一眼):`);
+        if (unmatched.length) console.log(unmatched.map((n) => `  - ${n}`).join('\n'));
+        console.log('记得 npm run export 更新快照。');
+        return;
+    }
+
     if (APPLY) {
         let inserted = 0;
         for (const poi of list) {
@@ -148,14 +179,14 @@ async function main() {
             if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
             const tags = ['就近随便吃', ...extraTags(poi)];
             await pool.query(
-                `INSERT INTO food_options(name, emoji, tags, latitude, longitude, address)
-                 VALUES ($1, $2, $3, $4, $5, $6)
+                `INSERT INTO food_options(name, emoji, tags, latitude, longitude, address, rating, cost)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                  ON CONFLICT DO NOTHING`,
-                [poi.name, guessEmoji(poi.name), tags, lat, lng, buildAddress(poi)]
+                [poi.name, guessEmoji(poi.name), tags, lat, lng, buildAddress(poi), poi._rating, parseCost(poi)]
             );
             inserted += 1;
         }
-        console.log(`\n已入库 ${inserted} 家(标签:就近随便吃 + 类型)。`);
+        console.log(`\n已入库 ${inserted} 家(标签:就近随便吃 + 类型,含评分/人均)。`);
         console.log('记得 npm run export 更新快照。');
     }
 

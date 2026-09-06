@@ -427,16 +427,6 @@ function renderTagChips() {
             chip.addEventListener('click', () => selectTag(name));
             container.appendChild(chip);
         });
-
-        // 就近抽签只放首页
-        if (container.id === 'list-chips') {
-            const nearChip = document.createElement('button');
-            nearChip.type = 'button';
-            nearChip.className = `chip${nearbyPool ? ' active' : ''}`;
-            nearChip.textContent = '📍 附近';
-            nearChip.addEventListener('click', startNearby);
-            container.appendChild(nearChip);
-        }
     });
 
     renderExclusionNote();
@@ -463,41 +453,6 @@ function selectTag(tag) {
 }
 
 // 就近抽签：浏览器定位 → 拉附近 1.5km 已收录的店 → 进入就近池
-function startNearby() {
-    const note = document.getElementById('exclusion-note');
-    const say = (text) => {
-        if (!note) return;
-        note.hidden = !text;
-        note.textContent = text || '';
-    };
-
-    if (!navigator.geolocation) {
-        say('这个浏览器不支持定位');
-        return;
-    }
-
-    say('正在获取定位…');
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-        try {
-            const { longitude, latitude } = pos.coords;
-            const list = await requestJson(`${API_BASE}/options?near=${longitude},${latitude}&radius=1500`);
-            if (!list.length) {
-                nearbyPool = null;
-                renderTagChips();
-                say('附近 1.5km 内还没有已收录的店，先逛逛「全部」吧');
-                return;
-            }
-            nearbyPool = list;
-            renderTagChips();
-            say(`就近模式：1.5km 内 ${list.length} 家，点「开始选择」开抽`);
-        } catch (error) {
-            say(`就近模式失败：${error.message}`);
-        }
-    }, (err) => {
-        say(`定位失败：${err.message}（页面需 HTTPS 或 localhost）`);
-    }, { timeout: 8000, maximumAge: 600000 });
-}
-
 function updateStats() {
     // 首页统计显示精选池数量；拓展池(378 家)点「随便吃点」才进
     document.getElementById('total-options').textContent = curatedCount();
@@ -762,7 +717,7 @@ function revealManage() {
     const manageBtn = document.getElementById('manage-btn');
     if (!manageBtn) return;
     manageBtn.hidden = false;
-    document.querySelector('.nav')?.classList.remove('two');
+    document.querySelector('.nav')?.classList.add('four');
 }
 
 function lockManage() {
@@ -770,7 +725,7 @@ function lockManage() {
     if (!manageBtn) return;
     manageBtn.hidden = true;
     manageBtn.classList.remove('active');
-    document.querySelector('.nav')?.classList.add('two');
+    document.querySelector('.nav')?.classList.remove('four');
     if (document.getElementById('manage-screen')?.classList.contains('active')) {
         switchScreen('start-screen');
     }
@@ -786,6 +741,192 @@ async function tryUnlockManage() {
     } catch (error) {
         // 密钥不对或用户取消：维持隐藏
     }
+}
+
+/* ---------------- 「附近」屏：定位就近挑选与抽签（抽签纯随机） ---------------- */
+
+const nearbyState = {
+    lat: null,
+    lng: null,
+    radius: 1500,
+    sort: 'distance', // distance | rating
+    list: [],
+    locating: false
+};
+
+const NEARBY_RADII = [
+    ['1km', 1000],
+    ['1.5km', 1500],
+    ['3km', 3000]
+];
+
+function initNearby() {
+    if (!nearbyState.lat || !nearbyState.list.length) locateNearby();
+    else renderNearbyControls();
+}
+
+function locateNearby() {
+    const status = document.getElementById('nearby-status');
+    const note = document.getElementById('nearby-note');
+    const say = (text) => {
+        if (status) status.textContent = text;
+        if (note) {
+            note.hidden = !text || !/失败|不支持/.test(text);
+            note.textContent = /失败|不支持/.test(text) ? text : '';
+        }
+    };
+
+    if (!navigator.geolocation) {
+        say('这个浏览器不支持定位');
+        renderNearbyControls();
+        return;
+    }
+    if (nearbyState.locating) return;
+    nearbyState.locating = true;
+    say('正在获取定位…');
+
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+        nearbyState.locating = false;
+        nearbyState.lat = pos.coords.latitude;
+        nearbyState.lng = pos.coords.longitude;
+        await loadNearbyList();
+    }, (err) => {
+        nearbyState.locating = false;
+        say(`定位失败：${err.message}（页面需 HTTPS 或 localhost，可重进本屏重试）`);
+        renderNearbyControls();
+    }, { timeout: 8000, maximumAge: 300000 });
+}
+
+async function loadNearbyList() {
+    const status = document.getElementById('nearby-status');
+    try {
+        status.textContent = '正在找附近的店…';
+        const list = await requestJson(
+            `${API_BASE}/options?near=${nearbyState.lng},${nearbyState.lat}&radius=${nearbyState.radius}`
+        );
+        nearbyState.list = list;
+        renderNearbyControls();
+        renderNearbyList();
+    } catch (error) {
+        status.textContent = `加载失败：${error.message}`;
+    }
+}
+
+function renderNearbyControls() {
+    const radiusBox = document.getElementById('nearby-radius-chips');
+    const sortBox = document.getElementById('nearby-sort-chips');
+    if (!radiusBox || !sortBox) return;
+
+    radiusBox.innerHTML = '';
+    NEARBY_RADII.forEach(([label, value]) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = `chip${nearbyState.radius === value ? ' active' : ''}`;
+        chip.textContent = label;
+        chip.addEventListener('click', () => {
+            if (nearbyState.radius === value || !nearbyState.lat) return;
+            nearbyState.radius = value;
+            loadNearbyList();
+        });
+        radiusBox.appendChild(chip);
+    });
+
+    sortBox.innerHTML = '';
+    [['distance', '按距离'], ['rating', '按评分']].forEach(([key, label]) => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = `chip${nearbyState.sort === key ? ' active' : ''}`;
+        chip.textContent = label;
+        chip.addEventListener('click', () => {
+            nearbyState.sort = key;
+            renderNearbyList();
+            renderNearbyControls();
+        });
+        sortBox.appendChild(chip);
+    });
+}
+
+function renderNearbyList() {
+    const box = document.getElementById('nearby-list');
+    const drawBtn = document.getElementById('nearby-draw-btn');
+    const status = document.getElementById('nearby-status');
+    if (!box || !drawBtn) return;
+
+    box.innerHTML = '';
+
+    const list = [...nearbyState.list];
+    if (nearbyState.sort === 'rating') {
+        list.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || a.distance_meters - b.distance_meters);
+    } else {
+        list.sort((a, b) => a.distance_meters - b.distance_meters);
+    }
+
+    if (!list.length) {
+        const empty = document.createElement('p');
+        empty.className = 'options-empty';
+        empty.textContent = '这个范围内还没有已收录的店，换个半径或逛逛「全部」';
+        box.appendChild(empty);
+        drawBtn.hidden = true;
+        if (status && nearbyState.lat) {
+            status.textContent = `半径 ${formatDistance(nearbyState.radius)} 内 0 家`;
+        }
+        return;
+    }
+
+    if (status && nearbyState.lat) {
+        status.textContent = `半径 ${formatDistance(nearbyState.radius)} 内 ${list.length} 家（${nearbyState.sort === 'rating' ? '按评分' : '按距离'}排序）`;
+    }
+
+    list.forEach((option) => {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'nearby-card';
+
+        const emoji = document.createElement('span');
+        emoji.className = 'nearby-card-emoji';
+        emoji.textContent = option.emoji || '🍽️';
+
+        const main = document.createElement('span');
+        main.className = 'nearby-card-main';
+
+        const name = document.createElement('span');
+        name.className = 'nearby-card-name';
+        name.textContent = option.name;
+
+        const meta = document.createElement('span');
+        meta.className = 'nearby-card-meta';
+        const ratingText = option.rating != null ? `⭐ ${option.rating}` : '⭐ —';
+        const costText = option.cost != null ? `¥${option.cost}/人` : null;
+        const tagText = (option.tags || []).filter((t) => t !== '就近随便吃').slice(0, 2).join('/');
+        meta.textContent = [ratingText, costText, tagText].filter(Boolean).join(' · ');
+
+        main.appendChild(name);
+        main.appendChild(meta);
+
+        const dist = document.createElement('span');
+        dist.className = 'nearby-card-dist';
+        dist.textContent = formatDistance(option.distance_meters);
+
+        card.appendChild(emoji);
+        card.appendChild(main);
+        card.appendChild(dist);
+        card.addEventListener('click', async () => {
+            switchScreen('map-screen');
+            if (window.HuliaMap) await window.HuliaMap.focus(option.id);
+        });
+
+        box.appendChild(card);
+    });
+
+    drawBtn.hidden = false;
+}
+
+// 就近抽一个：进入全局结果流程,从当前列表纯随机抽(评分只影响列表排序,不影响抽取)
+function drawNearby() {
+    if (isAnimating) return;
+    if (!nearbyState.list.length) return;
+    nearbyPool = nearbyState.list; // 让结果流程的随机池指向当前列表
+    startAnimation();
 }
 
 function startAnimation() {
@@ -817,6 +958,12 @@ function switchScreen(screenId) {
 
     if (screenId === 'start-screen') {
         document.getElementById('home-btn').classList.add('active');
+        nearbyPool = null; // 离开就近流程回到首页,就近池作废,避免下次抽签误用
+    }
+
+    if (screenId === 'nearby-screen') {
+        document.getElementById('nearby-btn').classList.add('active');
+        initNearby();
     }
 
     if (screenId === 'map-screen') {
@@ -1319,16 +1466,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const retryBtn = document.getElementById('retry-btn');
     const backHomeBtn = document.getElementById('back-home-btn');
     const homeBtn = document.getElementById('home-btn');
+    const nearbyBtn = document.getElementById('nearby-btn');
     const mapBtn = document.getElementById('map-btn');
     const manageBtn = document.getElementById('manage-btn');
     const addBtn = document.getElementById('add-btn');
+    const nearbyDrawBtn = document.getElementById('nearby-draw-btn');
 
     startBtn.addEventListener('click', startAnimation);
     retryBtn.addEventListener('click', redrawInPlace);
     backHomeBtn.addEventListener('click', () => switchScreen('start-screen'));
     homeBtn.addEventListener('click', () => switchScreen('start-screen'));
+    if (nearbyBtn) nearbyBtn.addEventListener('click', () => switchScreen('nearby-screen'));
     if (mapBtn) mapBtn.addEventListener('click', () => switchScreen('map-screen'));
-    manageBtn.addEventListener('click', () => switchScreen('manage-screen'));
+    if (manageBtn) manageBtn.addEventListener('click', () => switchScreen('manage-screen'));
+    if (nearbyDrawBtn) nearbyDrawBtn.addEventListener('click', drawNearby);
     addBtn.addEventListener('click', addFoodOption);
 
     const importSampleBtn = document.getElementById('import-sample-btn');
