@@ -137,7 +137,7 @@
 
         const preview = unlocated.slice(0, 10).map((option) => option.name).join('、');
         const suffix = unlocated.length > 10 ? ` 等 ${unlocated.length} 家` : '';
-        note.textContent = `还没定位 ${unlocated.length} 家（不显示在图上）：${preview}${suffix}。可在管理页编辑里补地址或经纬度。`;
+        note.textContent = `还没定位 ${unlocated.length} 家（不显示在图上）：${preview}${suffix}。站长补上坐标后就会上图。`;
         note.hidden = false;
         return located;
     }

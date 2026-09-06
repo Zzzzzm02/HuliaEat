@@ -21,6 +21,7 @@ for (const line of env.split('\n')) {
 const KEY = (process.env.AMAP_WEB_KEY || '').trim();
 const APPLY = process.argv.includes('--apply');
 const REFRESH = process.argv.includes('--refresh-ratings');
+const PRUNE = process.argv.includes('--prune');
 const RATING_MIN = 4.2;      // 评分门槛,当"人气"用(只管新店入库;刷新模式不受限)
 const TOTAL_CAP = 400;       // 整个池子上限(刷新模式不受限)
 const PAGES_PER_CIRCLE = 4;  // 每个商圈最多翻 4 页(25 条/页)
@@ -116,16 +117,16 @@ async function main() {
 
                 const rating = poi.business && poi.business.rating != null ? Number(poi.business.rating) : null;
                 // 刷新模式收全部(要看评分下滑/闭店);入库模式按门槛筛
-                if (!REFRESH && (rating === null || Number.isNaN(rating) || rating < RATING_MIN)) continue;
+                if (!REFRESH && !PRUNE && (rating === null || Number.isNaN(rating) || rating < RATING_MIN)) continue;
 
                 const key = `${poi.name}@${poi.location}`;
                 if (seen.has(key)) continue;
                 // 入库模式跳过与库内重名的;刷新模式要的恰恰是库内这些店
-                if (!REFRESH && existingNames.has(String(poi.name).toLowerCase())) continue;
+                if (!REFRESH && !PRUNE && existingNames.has(String(poi.name).toLowerCase())) continue;
 
                 seen.set(key, { ...poi, _rating: rating });
                 kept += 1;
-                if (!REFRESH && seen.size >= TOTAL_CAP) break outer;
+                if (!REFRESH && !PRUNE && seen.size >= TOTAL_CAP) break outer;
             }
             await sleep(GAP_MS);
         }
@@ -152,22 +153,49 @@ async function main() {
         console.log(`  ${lo}${hi ? '~' + hi : '+'}: ${n} 家`);
     }
 
+    // 清理模式:全量扫一遍商圈(不带任何过滤),拓展池里扫不到的店删除(闭店/除名/已改饮品店)
+    if (PRUNE) {
+        const seenNames = new Set(list.map((p) => String(p.name).toLowerCase()));
+        const inDb = await pool.query("SELECT name FROM food_options WHERE '就近随便吃' = ANY(tags)");
+        const gone = inDb.rows.map((r) => r.name).filter((n) => !seenNames.has(String(n).toLowerCase()));
+        let deleted = 0;
+        for (const name of gone) {
+            const r = await pool.query(
+                "DELETE FROM food_options WHERE LOWER(name) = LOWER($1) AND '就近随便吃' = ANY(tags)",
+                [name]
+            );
+            deleted += r.rowCount;
+        }
+        console.log(`\n清理完成:本轮扫到 ${seenNames.size} 家,删除扫不到的拓展店 ${deleted} 家:`);
+        if (gone.length) console.log(gone.map((n) => `  - ${n}`).join('\n'));
+        console.log('记得 npm run export 更新快照。');
+        return;
+    }
+
     // 刷新模式:只回填已有拓展店的评分/人均,顺带报告本轮没见到的店(可能闭店)
     if (REFRESH) {
+        const inDb = await pool.query("SELECT name, emoji FROM food_options WHERE '就近随便吃' = ANY(tags)");
+        const dbByName = new Map(inDb.rows.map((r) => [String(r.name).toLowerCase(), r]));
+        const seenNames = new Set(list.map((p) => String(p.name).toLowerCase()));
+
+        // 顺手把还是 🍽️ 占位的店按高德分类配上有意义的 emoji(已有专属图标的不动)
         let updated = 0;
+        let emojiFixed = 0;
         for (const poi of list) {
             if (poi._rating === null) continue;
+            const dbRow = dbByName.get(String(poi.name).toLowerCase());
+            const freshEmoji = dbRow && dbRow.emoji === '🍽️' ? emojiFromPoi(poi) : null;
             const r = await pool.query(
-                `UPDATE food_options SET rating = $1, cost = $2, updated_at = NOW()
-                 WHERE LOWER(name) = LOWER($3) AND '就近随便吃' = ANY(tags)`,
-                [poi._rating, parseCost(poi), poi.name]
+                `UPDATE food_options
+                 SET rating = $1, cost = $2, emoji = COALESCE($3, emoji), updated_at = NOW()
+                 WHERE LOWER(name) = LOWER($4) AND '就近随便吃' = ANY(tags)`,
+                [poi._rating, parseCost(poi), freshEmoji, poi.name]
             );
             updated += r.rowCount;
+            if (freshEmoji) emojiFixed += 1;
         }
-        const inDb = await pool.query("SELECT name FROM food_options WHERE '就近随便吃' = ANY(tags)");
-        const seenNames = new Set(list.map((p) => String(p.name).toLowerCase()));
         const unmatched = inDb.rows.map((r) => r.name).filter((n) => !seenNames.has(String(n).toLowerCase()));
-        console.log(`\n刷新完成:更新 ${updated} 家评分/人均;本轮未见到 ${unmatched.length} 家(可能闭店/改名,人工看一眼):`);
+        console.log(`\n刷新完成:更新 ${updated} 家评分/人均(其中 ${emojiFixed} 家补了 emoji);本轮未见到 ${unmatched.length} 家(可能闭店/改名,人工看一眼):`);
         if (unmatched.length) console.log(unmatched.map((n) => `  - ${n}`).join('\n'));
         console.log('记得 npm run export 更新快照。');
         return;
@@ -198,8 +226,6 @@ async function main() {
 
 // 与 emoji-rules.js 同源的兜底(脚本单独跑,不引前端那份也行——直接 require)
 function guessEmoji(name) {
-    const rules = JSON.parse(readFileSync(new URL('../package.json', import.meta.url)));
-    void rules;
     const table = [['火锅', '🍲'], ['烧烤', '🍢'], ['烤肉', '🍖'], ['面', '🍜'], ['小吃', '🥢'], ['粉', '🍜'],
         ['虾', '🦐'], ['蟹', '🦀'], ['鱼', '🐟'], ['鸭', '🦆'], ['鸡', '🍗'], ['牛', '🥩'], ['肉', '🥩'],
         ['茶', '🍵'], ['咖啡', '☕'], ['寿司', '🍣'], ['日料', '🍣'], ['披萨', '🍕'], ['汉堡', '🍔'],
@@ -208,6 +234,27 @@ function guessEmoji(name) {
         if (String(name).includes(kw)) return emoji;
     }
     return '🍽️';
+}
+
+// 用高德的分类词(keytag/type)配 emoji,比店名匹配准得多;认不出返回 null
+function emojiFromPoi(poi) {
+    const hay = `${poi.type || ''} ${(poi.business && poi.business.keytag) || ''}`;
+    const table = [
+        ['火锅', '🍲'], ['烧烤', '🍢'], ['烤肉', '🍖'], ['面馆', '🍜'], ['米线', '🍜'], ['面条', '🍜'],
+        ['小龙虾', '🦞'], ['虾', '🦐'], ['蟹', '🦀'], ['鱼', '🐟'], ['烧烤', '🍢'],
+        ['小吃', '🥢'], ['快餐', '🥢'], ['简餐', '🥢'], ['熟食', '🍗'], ['卤味', '🍗'],
+        ['日本', '🍣'], ['日料', '🍣'], ['寿司', '🍣'], ['韩国', '🍲'], ['西餐', '🍽️'], ['意大利', '🍕'],
+        ['披萨', '🍕'], ['汉堡', '🍔'], ['粥', '🥣'], ['饺子', '🥟'], ['包子', '🥟'],
+        ['茶艺', '🍵'], ['咖啡', '☕'], ['甜品', '🍰'], ['烘焙', '🍰'], ['面包', '🍞'],
+        ['川菜', '🌶️'], ['湘菜', '🌶️'], ['西北菜', '🥩'], ['新疆', '🍖'], ['东北菜', '🥘'],
+        ['中餐厅', '🥘'], ['本帮', '🥘'], ['江浙', '🥘'], ['杭', '🥘'], ['牛', '🥩'], ['羊', '🍖'],
+        ['鸡', '🍗'], ['鸭', '🦆'], ['鱼', '🐟'], ['虾', '🦐'], ['蟹', '🦀'], ['肉', '🥩'],
+        ['饭', '🍚'], ['面', '🍜'], ['粉', '🍜'], ['串', '🍢'], ['烤', '🍢'], ['汤', '🍲']
+    ];
+    for (const [kw, emoji] of table) {
+        if (hay.includes(kw)) return emoji;
+    }
+    return null;
 }
 
 main()
