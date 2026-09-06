@@ -13,9 +13,10 @@ const MAX_TAG_LENGTH = 12;
 const MAX_TAGS_COUNT = 6;
 
 let foodOptions = [];
-let selectedTag = null; // null = 全部；字符串 = 类型标签
+let selectedTag = null; // null = 全部(437 全量)；字符串 = 类型标签(含「精选」「就近随便吃」两个池标记)
 let nearbyPool = null;  // 「📍 附近」模式的就近店列表（null = 未启用就近模式）
-const EXTENSION_TAG = '就近随便吃'; // 拓展池标记:「全部」默认不含,点「随便吃点」才进
+const CURATED_TAG = '精选';        // 手工筛过的 59 家
+const EXTENSION_TAG = '就近随便吃'; // 高德批量拓展池(378 家)
 let isAnimating = false;
 let editingOptionId = null;
 let lastResult = null;
@@ -34,6 +35,7 @@ const DEFAULT_IMPORT_EMOJI = '🍽️';
 
 /* 标签 → 筛选 chip 文案：短句、俏皮，不追求严格分类；没收录的标签回退「今天想吃X」 */
 const TAG_CHIP_LABELS = {
+    '精选': '狐狸精选',
     '杭帮菜': '吃点好的',
     '面': '嗦碗面',
     '小吃': '垫垫肚子',
@@ -310,9 +312,12 @@ function collectTags() {
         }
         return [];
     }
+    // 池标记(精选/随便吃点)固定排最前,其余类型按店数降序
+    const priority = { [CURATED_TAG]: 0, [EXTENSION_TAG]: 1 };
     return [...counts.entries()]
         .map(([name, count]) => ({ name, count }))
-        .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh'));
+        .sort((a, b) => (priority[a.name] ?? 9) - (priority[b.name] ?? 9)
+            || b.count - a.count || a.name.localeCompare(b.name, 'zh'));
 }
 
 function getExcludedIds() {
@@ -338,21 +343,13 @@ function setExcludedIds(ids) {
     renderExclusionNote();
 }
 
-// 精选池计数(「全部」与首页统计用):拓展池不计入
-function curatedCount() {
-    return foodOptions.filter((option) => !(option.tags || []).includes(EXTENSION_TAG)).length;
-}
-
 // 当前筛选下的基础池:
-//   「全部」→ 精选池;「随便吃点」→ 拓展池;其他类型标签 → 带该标签的全部店(精选+拓展)
+//   「全部」→ 437 全量;类型标签(精选/随便吃点/火锅/面…)→ 带该标签的店
 function baseOptions() {
-    if (selectedTag === EXTENSION_TAG) {
-        return foodOptions.filter((option) => (option.tags || []).includes(EXTENSION_TAG));
-    }
     if (selectedTag) {
         return foodOptions.filter((option) => (option.tags || []).includes(selectedTag));
     }
-    return foodOptions.filter((option) => !(option.tags || []).includes(EXTENSION_TAG));
+    return foodOptions;
 }
 
 // 当前生效池：就近模式优先，其次按筛选取基础池（再剔除本机排除项）
@@ -413,8 +410,8 @@ function renderTagChips() {
         const allChip = document.createElement('button');
         allChip.type = 'button';
         allChip.className = `chip${selectedTag || nearbyPool ? '' : ' active'}`;
-        allChip.textContent = `全部 ${curatedCount()}`;
-        allChip.title = '精选池；拓展池请点「随便吃点」';
+        allChip.textContent = `全部 ${foodOptions.length}`;
+        allChip.title = '全量店铺(精选 + 拓展)';
         allChip.addEventListener('click', () => selectTag(null));
         container.appendChild(allChip);
 
@@ -454,8 +451,7 @@ function selectTag(tag) {
 
 // 就近抽签：浏览器定位 → 拉附近 1.5km 已收录的店 → 进入就近池
 function updateStats() {
-    // 首页统计显示精选池数量；拓展池(378 家)点「随便吃点」才进
-    document.getElementById('total-options').textContent = curatedCount();
+    document.getElementById('total-options').textContent = foodOptions.length;
     updateTodayCount();
 }
 
