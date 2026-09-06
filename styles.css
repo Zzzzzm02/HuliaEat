@@ -258,6 +258,16 @@ body::after {
     min-width: 64px;
 }
 
+.stat-clickable {
+    cursor: pointer;
+    border-radius: var(--r-sm);
+    transition: background .2s var(--ease);
+}
+
+.stat-clickable:hover {
+    background: var(--cream-2);
+}
+
 .stat-number {
     display: block;
     font-family: var(--font-display);
@@ -1187,6 +1197,157 @@ button {
     color: var(--ink-3);
     padding: 2.2rem 1rem;
     font-size: .92rem;
+}
+
+/* ---------------- 三选一 ---------------- */
+
+.triple-btn {
+    display: block;
+    width: 100%;
+    max-width: 320px;
+    margin: .9rem auto 0;
+}
+
+.triple-cards {
+    display: flex;
+    flex-direction: column;
+    gap: .8rem;
+    width: 100%;
+    max-width: 420px;
+}
+
+.triple-card {
+    display: flex;
+    align-items: center;
+    gap: .9rem;
+    width: 100%;
+    padding: 1rem .9rem;
+    border: 1.5px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    box-shadow: var(--sh-sm);
+    cursor: pointer;
+    text-align: left;
+    transition: border-color .2s var(--ease), transform .2s var(--spring), box-shadow .2s var(--ease);
+}
+
+.triple-card:hover {
+    border-color: var(--fox);
+    transform: translateY(-2px) scale(1.01);
+    box-shadow: var(--sh-md);
+}
+
+.triple-card-emoji {
+    width: 46px;
+    height: 46px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    font-size: 1.5rem;
+    background: var(--fox-soft);
+    border-radius: var(--r-sm);
+}
+
+.triple-card-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: .25rem;
+}
+
+.triple-card-name {
+    font-family: var(--font-serif-sc);
+    font-weight: 700;
+    font-size: 1.05rem;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+}
+
+.triple-card-meta {
+    font-size: .78rem;
+    color: var(--ink-2);
+}
+
+.triple-actions {
+    display: flex;
+    gap: .9rem;
+    justify-content: center;
+    margin-top: 1.3rem;
+    flex-wrap: wrap;
+}
+
+/* ---------------- 今日历史弹窗 ---------------- */
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    background: rgba(50, 37, 25, .45);
+    backdrop-filter: blur(2px);
+}
+
+.modal-card {
+    width: 100%;
+    max-width: 360px;
+    max-height: 70vh;
+    overflow-y: auto;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    box-shadow: var(--sh-lg);
+    padding: 1.2rem 1.3rem;
+}
+
+.modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: .7rem;
+}
+
+.modal-title {
+    font-family: var(--font-serif-sc);
+    font-weight: 900;
+    font-size: 1.15rem;
+    color: var(--ink);
+}
+
+.history-row {
+    display: flex;
+    align-items: center;
+    gap: .8rem;
+    padding: .5rem .15rem;
+    border-bottom: 1px dashed var(--line);
+}
+
+.history-row:last-child {
+    border-bottom: none;
+}
+
+.history-time {
+    flex-shrink: 0;
+    font-size: .78rem;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+}
+
+.history-name {
+    font-weight: 600;
+    font-size: .9rem;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+}
+
+.history-empty {
+    text-align: center;
+    color: var(--ink-3);
+    padding: 1.4rem 0;
+    font-size: .9rem;
 }
 
 /* ---------- 页脚 ---------- */

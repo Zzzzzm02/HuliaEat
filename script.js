@@ -2,6 +2,7 @@ const API_BASE = `${window.location.origin}/api`;
 
 const TODAY_COUNT_KEY = 'today_count';
 const LAST_DATE_KEY = 'last_date';
+const HISTORY_KEY = 'draw_history';
 const ADMIN_TOKEN_KEY = 'hulia_admin_token';
 const SELECTED_TAG_KEY = 'selected_tag';
 const EXCLUDED_KEY = 'excluded_option_ids';
@@ -471,6 +472,62 @@ function updateTodayCount() {
     document.getElementById('today-count').textContent = count;
 }
 
+/* ---------------- 今日抽签历史（点「今日已选」查看） ---------------- */
+
+function getTodayHistory() {
+    try {
+        const data = JSON.parse(localStorage.getItem(HISTORY_KEY) || 'null');
+        if (data && data.date === new Date().toDateString() && Array.isArray(data.items)) return data.items;
+    } catch (error) {
+        // ignore
+    }
+    return [];
+}
+
+// 每次有效抽取(单抽/三选一定稿)记一笔,只保留今天的
+function recordDraw(option) {
+    incrementTodayCount();
+    if (!option || !option.name) return;
+    const items = getTodayHistory();
+    items.unshift({ ts: Date.now(), emoji: option.emoji || '🍽️', name: option.name });
+    try {
+        localStorage.setItem(HISTORY_KEY, JSON.stringify({ date: new Date().toDateString(), items: items.slice(0, 100) }));
+    } catch (error) {
+        // ignore
+    }
+}
+
+function renderHistoryModal() {
+    const list = document.getElementById('history-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    const items = getTodayHistory();
+    if (!items.length) {
+        const empty = document.createElement('p');
+        empty.className = 'history-empty';
+        empty.textContent = '今天还没抽过，去抽一个？';
+        list.appendChild(empty);
+        return;
+    }
+
+    items.forEach((item) => {
+        const row = document.createElement('div');
+        row.className = 'history-row';
+        const time = new Date(item.ts);
+        const clock = `${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}`;
+        const clockEl = document.createElement('span');
+        clockEl.className = 'history-time';
+        clockEl.textContent = clock;
+        const nameEl = document.createElement('span');
+        nameEl.className = 'history-name';
+        nameEl.textContent = `${item.emoji} ${item.name}`;
+        row.appendChild(clockEl);
+        row.appendChild(nameEl);
+        list.appendChild(row);
+    });
+}
+
 function incrementTodayCount() {
     const today = new Date().toDateString();
     const lastDate = localStorage.getItem(LAST_DATE_KEY);
@@ -587,7 +644,7 @@ function animateResult() {
             resultElement.textContent = finalFood.name;
             resultContainer.classList.add('revealed');
             celebrate(resultContainer);
-            incrementTodayCount();
+            recordDraw(lastResult);
             updateResultActions();
             updateResultMap(lastResult);
         } finally {
@@ -926,6 +983,98 @@ function drawNearby() {
     if (!nearbyState.list.length) return;
     nearbyPool = nearbyState.list; // 让结果流程的随机池指向当前列表
     startAnimation();
+}
+
+/* ---------------- 三选一：连抽 3 张卡，选一张再看地图 ---------------- */
+
+let tripleCandidates = [];
+
+function openTriple() {
+    // 从当前池子洗牌取 3 家(不足 3 就有几张出几张),互不重复
+    const shuffled = [...getPool()].sort(() => Math.random() - 0.5);
+    tripleCandidates = shuffled.slice(0, 3);
+    switchScreen('triple-screen');
+    renderTripleCards();
+}
+
+function renderTripleCards() {
+    const box = document.getElementById('triple-cards');
+    if (!box) return;
+    box.innerHTML = '';
+
+    if (!tripleCandidates.length) {
+        const empty = document.createElement('p');
+        empty.className = 'options-empty';
+        empty.textContent = '当前筛选下没有可抽的店，换个标签试试';
+        box.appendChild(empty);
+        return;
+    }
+
+    tripleCandidates.forEach((option) => {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'triple-card';
+
+        const emoji = document.createElement('span');
+        emoji.className = 'triple-card-emoji';
+        emoji.textContent = option.emoji || '🍽️';
+
+        const main = document.createElement('span');
+        main.className = 'triple-card-main';
+
+        const name = document.createElement('span');
+        name.className = 'triple-card-name';
+        name.textContent = option.name;
+
+        const meta = document.createElement('span');
+        meta.className = 'triple-card-meta';
+        // 只给主要信息:什么菜 + 人均(地图等选定后再看)
+        const typeText = (option.tags || [])
+            .filter((t) => t !== CURATED_TAG && t !== EXTENSION_TAG)
+            .slice(0, 2).join('/');
+        const costText = option.cost != null ? `¥${option.cost}/人` : '人均未知';
+        meta.textContent = [typeText || '什么菜都有可能', costText].join(' · ');
+
+        main.appendChild(name);
+        main.appendChild(meta);
+        card.appendChild(emoji);
+        card.appendChild(main);
+        card.addEventListener('click', () => pickTriple(option));
+
+        box.appendChild(card);
+    });
+}
+
+function pickTriple(option) {
+    if (!option) return;
+    switchScreen('result-screen');
+    showChosenResult(option);
+}
+
+// 三选一定稿后的展示:与普通抽中的结果完全一致(缩略图/距离/庆祝一个不少)
+function showChosenResult(option) {
+    const emojiElement = document.getElementById('emoji');
+    const resultElement = document.getElementById('food-result');
+    const resultContainer = document.getElementById('result-container');
+    const resultContent = document.getElementById('result-content');
+    const mapLink = document.getElementById('result-map-link');
+    if (resultContent) resultContent.hidden = false;
+    if (mapLink) mapLink.hidden = true;
+    resultContainer.classList.remove('revealed');
+
+    lastResult = option && option.id ? option : null;
+    emojiElement.textContent = option.emoji || '🍽️';
+    resultElement.textContent = option.name;
+
+    try {
+        resultContainer.classList.add('revealed');
+        celebrate(resultContainer);
+        recordDraw(lastResult);
+        updateResultActions();
+        updateResultMap(lastResult);
+    } finally {
+        isAnimating = false;
+    }
 }
 
 function startAnimation() {
@@ -1501,6 +1650,31 @@ document.addEventListener('DOMContentLoaded', () => {
     if (skipBtn) skipBtn.addEventListener('click', skipCurrentResult);
     if (delistBtn) delistBtn.addEventListener('click', delistCurrentResult);
     if (resultMapLink) resultMapLink.addEventListener('click', openResultOnMap);
+
+    // 三选一
+    const tripleBtn = document.getElementById('triple-btn');
+    const tripleRedoBtn = document.getElementById('triple-redo-btn');
+    const tripleBackBtn = document.getElementById('triple-back-btn');
+    if (tripleBtn) tripleBtn.addEventListener('click', openTriple);
+    if (tripleRedoBtn) tripleRedoBtn.addEventListener('click', renderTripleCards);
+    if (tripleBackBtn) tripleBackBtn.addEventListener('click', () => switchScreen('start-screen'));
+
+    // 今日历史弹窗
+    const todayStat = document.getElementById('today-stat');
+    const historyModal = document.getElementById('history-modal');
+    const historyCloseBtn = document.getElementById('history-close-btn');
+    if (todayStat) {
+        todayStat.addEventListener('click', () => {
+            renderHistoryModal();
+            historyModal.hidden = false;
+        });
+    }
+    if (historyCloseBtn) historyCloseBtn.addEventListener('click', () => { historyModal.hidden = true; });
+    if (historyModal) {
+        historyModal.addEventListener('click', (e) => {
+            if (e.target === historyModal) historyModal.hidden = true;
+        });
+    }
 
     const tokenSetBtn = document.getElementById('token-set-btn');
     const tokenClearBtn = document.getElementById('token-clear-btn');
