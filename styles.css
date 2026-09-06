@@ -1483,6 +1483,11 @@ input:focus-visible {
     background: repeating-linear-gradient(-45deg, var(--cream-2), var(--cream-2) 14px, #F7EFDF 14px, #F7EFDF 28px);
 }
 
+.map-placeholder-text {
+    max-width: 30em;
+    text-align: center;
+}
+
 .map-placeholder code {
     padding: .1rem .4rem;
     border-radius: 6px;

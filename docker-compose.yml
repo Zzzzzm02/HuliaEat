@@ -37,6 +37,10 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       # 放在 Nginx 等反代后面时设为 true
       TRUST_PROXY: ${TRUST_PROXY:-false}
+      # 高德地图：JSAPI+安全密钥给前端画图（/api/config 下发），Web 服务 key 给缩略图代理
+      AMAP_JSAPI_KEY: ${AMAP_JSAPI_KEY:-}
+      AMAP_SECURITY_CODE: ${AMAP_SECURITY_CODE:-}
+      AMAP_WEB_KEY: ${AMAP_WEB_KEY:-}
     ports:
       - "${APP_PORT:-3000}:3000"
     restart: unless-stopped

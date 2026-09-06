@@ -34,7 +34,7 @@
     function showPlaceholder(html) {
         const placeholder = el('map-placeholder');
         if (!placeholder) return;
-        placeholder.innerHTML = html;
+        placeholder.innerHTML = `<div class="map-placeholder-text">${html}</div>`;
         placeholder.hidden = false;
     }
 
