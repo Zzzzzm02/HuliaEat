@@ -462,34 +462,11 @@ button {
     font-weight: 700;
     letter-spacing: .04em;
     color: #FFF8F1;
-    background: linear-gradient(160deg, var(--fox-2) 0%, var(--fox-deep) 100%);
+    /* 高饱和亮橘:去掉深端,整体提亮 */
+    background: linear-gradient(160deg, #FF9A3D 0%, #FF6E14 100%);
     box-shadow: var(--sh-fox), inset 0 1px 0 rgba(255, 255, 255, .28);
     cursor: pointer;
     transition: transform .25s var(--ease), box-shadow .25s var(--ease);
-    animation: cta-glow 2.8s ease-in-out infinite;
-}
-
-/* 光泽扫过 */
-.main-btn::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -60%;
-    width: 40%;
-    height: 100%;
-    background: linear-gradient(105deg, transparent, rgba(255, 255, 255, .35), transparent);
-    transform: skewX(-20deg);
-    animation: shine 3.4s ease-in-out infinite;
-}
-
-@keyframes cta-glow {
-    0%, 100% { box-shadow: var(--sh-fox), inset 0 1px 0 rgba(255, 255, 255, .28); }
-    50%      { box-shadow: 0 18px 38px -8px rgba(230, 99, 28, .6), inset 0 1px 0 rgba(255, 255, 255, .28); }
-}
-
-@keyframes shine {
-    0%, 55% { left: -60%; }
-    100%    { left: 130%; }
 }
 
 .main-btn:hover {
