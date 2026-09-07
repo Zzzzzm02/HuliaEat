@@ -424,8 +424,22 @@ function renderTagChips() {
         allChip.addEventListener('click', () => selectTag(null));
         container.appendChild(allChip);
 
+        // 池标记(乌萨奇精选/随便吃点)固定在最前
+        [CURATED_TAG, EXTENSION_TAG]
+            .filter((name) => !HIDDEN_TAG_CHIPS.has(name))
+            .forEach((name) => {
+                const meta = tags.find((t) => t.name === name);
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = `chip${!nearbyPool && selectedTag === name ? ' active' : ''}`;
+                chip.textContent = tagChipLabel(name);
+                chip.title = meta ? `${meta.count} 家店` : '';
+                chip.addEventListener('click', () => selectTag(name));
+                container.appendChild(chip);
+            });
+
         tags.forEach(({ name, count }) => {
-            // 池标记(精选/随便吃点)单独渲染在前
+            // 池标记已渲染在前
             if (name === CURATED_TAG || name === EXTENSION_TAG) return;
             const chip = document.createElement('button');
             chip.type = 'button';
