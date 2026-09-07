@@ -462,8 +462,8 @@ button {
     font-weight: 700;
     letter-spacing: .04em;
     color: #FFF8F1;
-    /* 高饱和亮橘:去掉深端,整体提亮 */
-    background: linear-gradient(160deg, #FF9A3D 0%, #FF6E14 100%);
+    /* 原版配色整体提亮一档 */
+    background: linear-gradient(160deg, #F5852D 0%, #D85E14 100%);
     box-shadow: var(--sh-fox), inset 0 1px 0 rgba(255, 255, 255, .28);
     cursor: pointer;
     transition: transform .25s var(--ease), box-shadow .25s var(--ease);
