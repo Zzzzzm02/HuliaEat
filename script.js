@@ -18,6 +18,8 @@ let selectedTag = null; // null = 全部(437 全量)；字符串 = 类型标签(
 let nearbyPool = null;  // 「📍 附近」模式的就近店列表（null = 未启用就近模式）
 const CURATED_TAG = '精选';        // 手工筛过的 59 家
 const EXTENSION_TAG = '就近随便吃'; // 高德批量拓展池(378 家)
+const BUDGET_TAG = '人均<100';      // 预算筛选(虚拟标签,按 cost 字段实时过滤)
+const BUDGET_MAX = 100;
 let isAnimating = false;
 let editingOptionId = null;
 let lastResult = null;
@@ -41,7 +43,8 @@ const TAG_CHIP_LABELS = {
     '面': '嗦碗面',
     '火锅': '整点火锅',
     '烧烤': '撸串烤肉',
-    '换口味': '换换口味'
+    '换口味': '换换口味',
+    [BUDGET_TAG]: '人均<100'
 };
 
 /* 不单独出 chip 的标签:店仍在「全部」与类型筛选之外的数据里,只是不占筛选位 */
@@ -303,8 +306,8 @@ function collectTags() {
             counts.set(tag, (counts.get(tag) || 0) + 1);
         }
     }
-    // 选中的标签可能已经没有任何店：静默回落到「全部」
-    if (selectedTag && !counts.has(selectedTag)) {
+    // 选中的标签可能已经没有任何店：静默回落到「全部」(预算筛选是虚拟标签,不参与此判断)
+    if (selectedTag && selectedTag !== BUDGET_TAG && !counts.has(selectedTag)) {
         selectedTag = null;
         try {
             localStorage.removeItem(SELECTED_TAG_KEY);
@@ -346,8 +349,12 @@ function setExcludedIds(ids) {
 }
 
 // 当前筛选下的基础池:
-//   「全部」→ 437 全量;类型标签(精选/随便吃点/火锅/面…)→ 带该标签的店
+//   「全部」→ 437 全量;「人均<100」→ 按预算过滤;类型标签 → 带该标签的店
 function baseOptions() {
+    if (selectedTag === BUDGET_TAG) {
+        // 预算筛选:只抽已录人均且低于门槛的店
+        return foodOptions.filter((option) => option.cost != null && option.cost < BUDGET_MAX);
+    }
     if (selectedTag) {
         return foodOptions.filter((option) => (option.tags || []).includes(selectedTag));
     }
@@ -418,6 +425,8 @@ function renderTagChips() {
         container.appendChild(allChip);
 
         tags.forEach(({ name, count }) => {
+            // 池标记(精选/随便吃点)单独渲染在前
+            if (name === CURATED_TAG || name === EXTENSION_TAG) return;
             const chip = document.createElement('button');
             chip.type = 'button';
             chip.className = `chip${!nearbyPool && selectedTag === name ? ' active' : ''}`;
@@ -426,6 +435,17 @@ function renderTagChips() {
             chip.addEventListener('click', () => selectTag(name));
             container.appendChild(chip);
         });
+
+        // 预算筛选:插在池标记之后、类型标签之前(管理页不需要)
+        if (container.id !== 'manage-list-chips') {
+            const budgetChip = document.createElement('button');
+            budgetChip.type = 'button';
+            budgetChip.className = `chip${!nearbyPool && selectedTag === BUDGET_TAG ? ' active' : ''}`;
+            budgetChip.textContent = BUDGET_TAG;
+            budgetChip.title = `只抽人均低于 ${BUDGET_MAX} 的店(已录人均的)`;
+            budgetChip.addEventListener('click', () => selectTag(BUDGET_TAG));
+            container.appendChild(budgetChip);
+        }
 
         // 三选一暂缓上线(有 bug),开关 TRIPLE_ENABLED 改回 true 即恢复
         if (container.id === 'list-chips' && TRIPLE_ENABLED) {
