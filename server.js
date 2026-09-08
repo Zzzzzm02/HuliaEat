@@ -102,13 +102,15 @@ pool.on('error', (error) => {
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 // 只显式放行前端真正需要的资源，避免把仓库内容（README / package.json / data / .git）整体暴露出去
+// HTML/JS/CSS 一律 no-cache：改版后浏览器必须回源校验，杜绝"改了没生效"的启发式缓存；
+// 图标体积小且基本不变，保留长缓存
 const SERVED_FILES = new Map([
-    ['/styles.css', { file: 'styles.css', type: 'text/css; charset=utf-8' }],
-    ['/script.js', { file: 'script.js', type: 'application/javascript; charset=utf-8' }],
-    ['/emoji-rules.js', { file: 'emoji-rules.js', type: 'application/javascript; charset=utf-8' }],
-    ['/map.js', { file: 'map.js', type: 'application/javascript; charset=utf-8' }],
+    ['/styles.css', { file: 'styles.css', type: 'text/css; charset=utf-8', cache: 'no-cache' }],
+    ['/script.js', { file: 'script.js', type: 'application/javascript; charset=utf-8', cache: 'no-cache' }],
+    ['/map.js', { file: 'map.js', type: 'application/javascript; charset=utf-8', cache: 'no-cache' }],
+    ['/emoji-rules.js', { file: 'emoji-rules.js', type: 'application/javascript; charset=utf-8', cache: 'no-cache' }],
     // PWA：sw.js 必须 no-cache，否则更新会卡在浏览器缓存上
-    ['/manifest.webmanifest', { file: 'manifest.webmanifest', type: 'application/manifest+json; charset=utf-8' }],
+    ['/manifest.webmanifest', { file: 'manifest.webmanifest', type: 'application/manifest+json; charset=utf-8', cache: 'no-cache' }],
     ['/sw.js', { file: 'sw.js', type: 'application/javascript; charset=utf-8', cache: 'no-cache' }],
     ['/icons/icon-192.png', { file: 'icons/icon-192.png', type: 'image/png', cache: 'public, max-age=604800' }],
     ['/icons/icon-512.png', { file: 'icons/icon-512.png', type: 'image/png', cache: 'public, max-age=604800' }],
@@ -714,6 +716,8 @@ async function getOptionCount() {
 /* ---------------- 静态资源（显式白名单） ---------------- */
 
 app.get('/', (req, res) => {
+    // HTML 也协商缓存:改版即生效,不靠启发式缓存碰运气
+    res.set('Cache-Control', 'no-cache');
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 

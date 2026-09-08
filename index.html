@@ -73,13 +73,6 @@
                     <p id="exclusion-note" class="exclusion-note" hidden></p>
 
                     <button id="start-btn" class="main-btn">开始选择</button>
-                    <div id="triple-inline" class="triple-inline" hidden>
-                        <div id="triple-cards" class="triple-cards"></div>
-                        <div class="triple-actions">
-                            <button id="triple-redo-btn" class="chip-action" type="button">🎲 换一批</button>
-                            <button id="triple-back-btn" class="chip-action" type="button">取消</button>
-                        </div>
-                    </div>
                 </div>
 
                 <!-- 结果 -->
@@ -98,6 +91,10 @@
                             </span>
                             <span class="result-map-hint">📍 在地图中查看</span>
                         </button>
+                        <div id="result-triple" class="result-triple" hidden>
+                            <p class="result-triple-hint">三个都挺香?选一张最想吃的</p>
+                            <div id="result-triple-cards" class="triple-cards"></div>
+                        </div>
                     </div>
                     <div class="result-actions">
                         <button id="retry-btn" class="secondary-btn">再抽一次</button>

@@ -373,6 +373,13 @@ function renderExclusionNote() {
     const note = document.getElementById('exclusion-note');
     if (!note) return;
 
+    // 三选一模式下给一句模式提示
+    if (tripleMode) {
+        note.hidden = false;
+        note.textContent = '三选一模式：点「开始选择」连抽 3 张，选一张最想吃的';
+        return;
+    }
+
     const baseSize = nearbyPool ? nearbyPool.length : baseOptions().length;
 
     const visible = getPool().length;
@@ -468,7 +475,7 @@ function renderTagChips() {
             tripleChip.className = `chip chip-triple${tripleMode ? ' active' : ''}`;
             tripleChip.textContent = '三选一';
             tripleChip.title = '连抽 3 个,选一个最想吃的';
-            tripleChip.addEventListener('click', () => (tripleMode ? exitTriple() : openTriple()));
+            tripleChip.addEventListener('click', toggleTripleMode);
             container.appendChild(tripleChip);
         }
     });
@@ -479,7 +486,7 @@ function renderTagChips() {
 function selectTag(tag) {
     selectedTag = tag || null;
     nearbyPool = null; // 切走标签即退出就近模式
-    if (tripleMode) exitTriple(); // 切标签同时退出三选一模式
+    tripleMode = false; // 切标签同时退出三选一模式
 
     try {
         if (selectedTag) {
@@ -684,15 +691,20 @@ function animateResult() {
         }
 
         try {
-            const finalFood = getRandomFood();
-            lastResult = finalFood && finalFood.id ? finalFood : null;
-            emojiElement.textContent = finalFood.emoji;
-            resultElement.textContent = finalFood.name;
-            resultContainer.classList.add('revealed');
-            celebrate(resultContainer);
-            recordDraw(lastResult);
-            updateResultActions();
-            updateResultMap(lastResult);
+            if (tripleMode) {
+                // 三选一模式:动画照跑,最后揭晓 3 张候选卡,选一张才计入
+                showTripleCandidates(resultContainer);
+            } else {
+                const finalFood = getRandomFood();
+                lastResult = finalFood && finalFood.id ? finalFood : null;
+                emojiElement.textContent = finalFood.emoji;
+                resultElement.textContent = finalFood.name;
+                resultContainer.classList.add('revealed');
+                celebrate(resultContainer);
+                recordDraw(lastResult);
+                updateResultActions();
+                updateResultMap(lastResult);
+            }
         } finally {
             // 无论展示环节出什么岔子，都不能把后续抽签锁死
             isAnimating = false;
@@ -1034,55 +1046,38 @@ function drawNearby() {
     startAnimation();
 }
 
-/* ---------------- 三选一：首页就地连抽 3 张卡，选一张再看地图 ---------------- */
+/* ---------------- 三选一：一种抽取方式——「开始选择」连抽 3 张，选一张再看地图 ---------------- */
 
 // 已修复可用;出问题时可改回 false 快速下线
 const TRIPLE_ENABLED = true;
 
-let tripleCandidates = [];
-let tripleMode = false;
+let tripleMode = false;      // 三选一模式开关(chip 切换)
+let tripleCandidates = [];   // 结果屏上的 3 张候选卡
 
-// 三选一 chip:点开在首页原位出 3 张卡(不跳页)
-function openTriple() {
+// chip 点击:切换三选一模式(与选标签同级,只切方式,不直接出结果)
+function toggleTripleMode() {
     if (!TRIPLE_ENABLED) return;
+    tripleMode = !tripleMode;
+    renderTagChips();
+    renderExclusionNote();
+}
+
+// 从当前池子抽 3 家不重复的候选
+function drawTripleCandidates() {
     const shuffled = [...getPool()].sort(() => Math.random() - 0.5);
-    tripleCandidates = shuffled.slice(0, 3);
-    tripleMode = true;
-    renderTripleMode();
+    return shuffled.slice(0, 3);
 }
 
-function exitTriple() {
-    tripleMode = false;
-    renderTripleMode();
-}
-
-// 三选一模式下首页变身:大 logo 区和单抽按钮暂时让位给三张卡
-function renderTripleMode() {
-    const hero = document.querySelector('.hero-content');
-    const startBtn = document.getElementById('start-btn');
-    const inline = document.getElementById('triple-inline');
-    if (hero) hero.hidden = tripleMode;
-    if (startBtn) startBtn.hidden = tripleMode;
-    if (inline) inline.hidden = !tripleMode;
-    renderTripleCards();
-    // 卡片出在筛选行下方,滚回顶部让三张卡尽收眼底
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-}
-
-function renderTripleCards() {
-    const box = document.getElementById('triple-cards');
-    if (!box) return;
+function renderCandidateCards(box, candidates) {
     box.innerHTML = '';
-
-    if (!tripleCandidates.length) {
+    if (!candidates.length) {
         const empty = document.createElement('p');
         empty.className = 'options-empty';
         empty.textContent = '当前筛选下没有可抽的店，换个标签试试';
         box.appendChild(empty);
         return;
     }
-
-    tripleCandidates.forEach((option) => {
+    candidates.forEach((option) => {
         const card = document.createElement('button');
         card.type = 'button';
         card.className = 'triple-card';
@@ -1111,20 +1106,53 @@ function renderTripleCards() {
         main.appendChild(meta);
         card.appendChild(emoji);
         card.appendChild(main);
-        card.addEventListener('click', () => pickTriple(option));
+        card.addEventListener('click', () => pickTripleCandidate(option));
 
         box.appendChild(card);
     });
 }
 
-function pickTriple(option) {
-    if (!option) return;
-    exitTriple();
-    switchScreen('result-screen');
-    showChosenResult(option);
+// 三选一模式的「开始选择」:跑完抽奖动画后,结果屏上出 3 张候选卡(纯随机,选定才记录)
+function showTripleCandidates(resultContainer) {
+    tripleCandidates = drawTripleCandidates();
+    const box = document.getElementById('result-triple-cards');
+    if (!box) return;
+    renderCandidateCards(box, tripleCandidates);
+
+    // 单店展示暂时让位给三张卡
+    document.getElementById('result-content').hidden = true;
+    document.getElementById('result-address').hidden = true;
+    document.getElementById('result-map-link').hidden = true;
+    document.getElementById('result-triple').hidden = false;
+    resultContainer.classList.add('revealed');
+    celebrate(resultContainer);
+    updateResultActions();
+    // 不在此处 recordDraw——选定一张才计入
 }
 
-// 三选一定稿后的展示:与普通抽中的结果完全一致(缩略图/距离/庆祝一个不少)
+// 点选一张候选:记录并切换到单店展示(地图缩略图等)
+function pickTripleCandidate(option) {
+    if (!option || !option.id) return;
+    lastResult = option;
+
+    document.getElementById('result-triple').hidden = true;
+    const emojiElement = document.getElementById('emoji');
+    const resultContent = document.getElementById('result-content');
+    emojiElement.textContent = option.emoji || '🍽️';
+    document.getElementById('food-result').textContent = option.name;
+    resultContent.hidden = false;
+
+    try {
+        recordDraw(lastResult);
+        updateResultActions();
+        updateResultMap(lastResult);
+        resultContainer.classList.add('revealed');
+        celebrate(resultContainer);
+    } finally {
+        isAnimating = false;
+    }
+}
+
 function showChosenResult(option) {
     const emojiElement = document.getElementById('emoji');
     const resultElement = document.getElementById('food-result');
@@ -1730,11 +1758,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (delistBtn) delistBtn.addEventListener('click', delistCurrentResult);
     if (resultMapLink) resultMapLink.addEventListener('click', openResultOnMap);
 
-    // 三选一(首页就地)
-    const tripleRedoBtn = document.getElementById('triple-redo-btn');
-    const tripleBackBtn = document.getElementById('triple-back-btn');
-    if (tripleRedoBtn) tripleRedoBtn.addEventListener('click', () => { tripleCandidates = [...getPool()].sort(() => Math.random() - 0.5).slice(0, 3); renderTripleCards(); });
-    if (tripleBackBtn) tripleBackBtn.addEventListener('click', exitTriple);
 
     // 今日历史弹窗
     const todayStat = document.getElementById('today-stat');
