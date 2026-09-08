@@ -1036,8 +1036,8 @@ function drawNearby() {
 
 /* ---------------- 三选一：首页就地连抽 3 张卡，选一张再看地图 ---------------- */
 
-// 有 bug 暂时下线:改好后把开关改回 true 即可重新启用
-const TRIPLE_ENABLED = false;
+// 已修复可用;出问题时可改回 false 快速下线
+const TRIPLE_ENABLED = true;
 
 let tripleCandidates = [];
 let tripleMode = false;

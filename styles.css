@@ -1198,62 +1198,70 @@ button {
 
 .triple-cards {
     display: flex;
-    flex-direction: column;
-    gap: .8rem;
+    flex-direction: row;
+    gap: .6rem;
     width: 100%;
-    max-width: 420px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    padding: .2rem .1rem .6rem;
+    scrollbar-width: none;
+}
+
+.triple-cards::-webkit-scrollbar {
+    display: none;
 }
 
 .triple-card {
+    flex: 0 0 44%;
+    scroll-snap-align: center;
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: .9rem;
-    width: 100%;
-    padding: 1rem .9rem;
+    gap: .45rem;
+    padding: .9rem .6rem .7rem;
     border: 1.5px solid var(--line);
     border-radius: var(--r-md);
     background: var(--paper);
     box-shadow: var(--sh-sm);
     cursor: pointer;
-    text-align: left;
+    text-align: center;
     transition: border-color .2s var(--ease), transform .2s var(--spring), box-shadow .2s var(--ease);
 }
 
 .triple-card:hover {
     border-color: var(--fox);
-    transform: translateY(-2px) scale(1.01);
+    transform: translateY(-2px);
     box-shadow: var(--sh-md);
 }
 
 .triple-card-emoji {
-    width: 46px;
-    height: 46px;
-    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
     display: grid;
     place-items: center;
-    font-size: 1.5rem;
+    font-size: 1.4rem;
     background: var(--fox-soft);
-    border-radius: var(--r-sm);
+    border-radius: 50%;
 }
 
 .triple-card-main {
-    flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: .25rem;
+    gap: .2rem;
+    align-items: center;
 }
 
 .triple-card-name {
     font-family: var(--font-serif-sc);
     font-weight: 700;
-    font-size: 1.05rem;
+    font-size: .95rem;
     color: var(--ink);
     overflow-wrap: anywhere;
 }
 
 .triple-card-meta {
-    font-size: .78rem;
+    font-size: .74rem;
     color: var(--ink-2);
 }
 
