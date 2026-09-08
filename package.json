@@ -1,6 +1,6 @@
 {
   "name": "hulia-eat",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "description": "狐狸今天吃什么 - 餐饮选择应用",
   "main": "server.js",
   "scripts": {
