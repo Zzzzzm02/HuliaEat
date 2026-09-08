@@ -425,7 +425,7 @@ function renderTagChips() {
 
         const allChip = document.createElement('button');
         allChip.type = 'button';
-        allChip.className = `chip${selectedTag || nearbyPool ? '' : ' active'}`;
+        allChip.className = `chip${!selectedTag && !nearbyPool && !tripleMode ? ' active' : ''}`;
         allChip.textContent = `全部 ${foodOptions.length}`;
         allChip.title = '全量店铺(精选 + 拓展)';
         allChip.addEventListener('click', () => selectTag(null));
@@ -1054,10 +1054,18 @@ const TRIPLE_ENABLED = true;
 let tripleMode = false;      // 三选一模式开关(chip 切换)
 let tripleCandidates = [];   // 结果屏上的 3 张候选卡
 
-// chip 点击:切换三选一模式(与选标签同级,只切方式,不直接出结果)
+// chip 点击:切换三选一模式(与标签互斥——点它清空标签选择,从全量里抽)
 function toggleTripleMode() {
     if (!TRIPLE_ENABLED) return;
     tripleMode = !tripleMode;
+    if (tripleMode) {
+        selectedTag = null;
+        try {
+            localStorage.removeItem(SELECTED_TAG_KEY);
+        } catch (error) {
+            // ignore
+        }
+    }
     renderTagChips();
     renderExclusionNote();
 }
